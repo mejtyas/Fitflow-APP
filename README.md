@@ -66,6 +66,7 @@ npx eas-cli login
 npx eas-cli init
 npm run build:android:preview
 npm run build:ios:preview
+npm run build:ios:simulator
 npm run build:all
 ```
 

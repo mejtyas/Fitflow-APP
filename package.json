@@ -66,9 +66,10 @@
     "test:coverage": "jest --runInBand --coverage",
     "doctor": "expo-doctor",
     "validate": "npm run typecheck && npm run lint && npm run test",
-    "build:android:preview": "eas build --platform android --profile preview",
-    "build:ios:preview": "eas build --platform ios --profile preview",
-    "build:all": "eas build --platform all --profile production"
+    "build:android:preview": "npx eas-cli@21.0.1 build --platform android --profile preview",
+    "build:ios:preview": "npx eas-cli@21.0.1 build --platform ios --profile preview",
+    "build:ios:simulator": "npx eas-cli@21.0.1 build --platform ios --profile ios-simulator",
+    "build:all": "npx eas-cli@21.0.1 build --platform all --profile production"
   },
   "jest": {
     "preset": "jest-expo",

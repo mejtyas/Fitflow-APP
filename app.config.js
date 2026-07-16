@@ -9,10 +9,12 @@ module.exports = ({ config }) => ({
   scheme: 'fitflow',
   userInterfaceStyle: 'dark',
   icon: './assets/images/icon.png',
-  runtimeVersion: { policy: 'appVersion' },
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'com.mejtyas.fitflow',
+    infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
   android: {
     package: 'com.mejtyas.fitflow',
