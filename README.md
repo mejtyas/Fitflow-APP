@@ -14,7 +14,7 @@ FitFlow Mobile is the Expo/React Native rewrite of the FitFlow web app. It targe
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.13+
 - npm 10+
 - An Android emulator/device, iOS simulator/device, or an Expo development build
 - An Expo account for EAS cloud builds
