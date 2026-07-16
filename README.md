@@ -1,56 +1,95 @@
-# Welcome to your Expo app 👋
+# FitFlow Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+FitFlow Mobile is the Expo/React Native rewrite of the FitFlow web app. It targets Android and iOS, connects directly to the existing Supabase project, and keeps the current schema, users, workouts, exercises, sessions, history, statistics, and feedback data.
 
-## Get started
+## Included
 
-1. Install dependencies
+- Email/password sign-in, registration, session restore, and sign-out
+- Dashboard summaries, weekly rhythm, recent activity, and active-session resume
+- Workout and exercise creation, editing, ordering, search, deletion, and notes
+- Live workout logging with kg/reps, previous performance, warm-up suggestions, per-exercise rest settings, local crash recovery, and background rest notifications
+- Workout history, editable timestamps and rest periods, delete/clear controls, CSV export, and native XLSX export
+- Exercise progress charts, estimated one-rep max, statistics, feedback, and account settings
+- Encrypted native auth persistence through SecureStore and user-scoped Supabase queries protected by the existing RLS policies
 
-   ```bash
-   npm install
-   ```
+## Requirements
 
-2. Start the app
+- Node.js 20+
+- npm 10+
+- An Android emulator/device, iOS simulator/device, or an Expo development build
+- An Expo account for EAS cloud builds
 
-   ```bash
-   npx expo start
-   ```
+## Environment
 
-In the output, you'll find options to open the app in a
+Copy `.env.example` to `.env` and use the same public Supabase values as the web app:
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your-publishable-key
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Only the publishable/anon client key belongs in the app. Never add a Supabase service-role key. `.env` and EAS local files are ignored by Git.
 
-### Other setup steps
+## Local development
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npm ci
+npm start
+```
 
-## Learn more
+Useful checks:
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run validate
+npm run test:coverage
+npm run doctor
+npx expo install --check
+npx expo export --platform all
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Because FitFlow uses native notification and secure-storage modules, a development build is the representative test environment:
 
-## Join the community
+```bash
+npx eas-cli build --platform android --profile development
+npx eas-cli build --platform ios --profile development
+npm run dev
+```
 
-Join our community of developers creating universal apps.
+## EAS setup and releases
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+The three profiles in `eas.json` map to the EAS `development`, `preview`, and `production` environments. Add both environment variables to all three environments in the Expo dashboard or with EAS CLI, preserving their names exactly.
+
+Link the repository to the Expo project once, then build:
+
+```bash
+npx eas-cli login
+npx eas-cli init
+npm run build:android:preview
+npm run build:ios:preview
+npm run build:all
+```
+
+The Android package and iOS bundle identifier are both `com.mejtyas.fitflow`. Production credentials remain managed by the owning Expo/Apple/Google accounts and are intentionally not committed.
+
+## Data and failure safety
+
+The mobile app does not create a second database or copy user records. It uses the original tables and RPC functions through the same Supabase URL. Auth refresh tokens are chunked and encrypted in platform SecureStore. Active set edits are mirrored locally, saved with a short debounce to avoid redundant requests, flushed when the app backgrounds, and must successfully sync before a workout can be finished. React Query deduplicates and caches reads while reconnect and foreground handlers refresh stale data.
+
+Destructive operations require confirmation, and deleting all account data requires two confirmations. Supabase Row Level Security remains the final authorization boundary for every mobile request.
+
+## Project layout
+
+- `src/app` — Expo Router screens and navigation
+- `src/components` — reusable mobile UI and chart/input components
+- `src/hooks` — active-workout state, local recovery, debounced persistence, and timer orchestration
+- `src/services` — typed Supabase queries and mutations
+- `src/lib` — validation, metrics, formatting, secure persistence, notifications, and generated database types
+- `__tests__` — Jest unit and component tests
+
+## Release checklist
+
+1. Run `npm ci` and `npm run validate` on a clean checkout.
+2. Run `npm run doctor`, `npx expo install --check`, and `npx expo export --platform all`.
+3. Test sign-in, a complete workout, timer notification, history export, and account deletion against a non-production test account on one Android and one iOS device.
+4. Build preview binaries and complete platform store privacy, screenshots, signing, and internal-testing requirements.
+5. Build the production artifacts with `npm run build:all`.

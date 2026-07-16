@@ -30,13 +30,22 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# local env files and EAS pull output
+.env
+.env.*
+!.env.example
 
 # typescript
 *.tsbuildinfo
 
-example
+# tests
+coverage/
+
+# EAS credentials and local builds
+credentials.json
+*.aab
+*.apk
+*.ipa
 
 # generated native folders
 /ios
