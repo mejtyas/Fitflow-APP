@@ -19,6 +19,25 @@ FitFlow Mobile is the Expo/React Native rewrite of the FitFlow web app. It targe
 - An Android emulator/device, iOS simulator/device, or an Expo development build
 - An Expo account for EAS cloud builds
 
+## Expo SDK compatibility
+
+FitFlow is intentionally pinned to **Expo SDK 54**. The project originally used
+SDK 57, but the public Expo Go build available from the iOS App Store is version
+54.0.2 and cannot load SDK 57 projects. The App Store can still report Expo Go as
+fully updated because Apple does not allow a different SDK-specific Expo Go build
+to be sideloaded onto a physical iPhone.
+
+The downgrade keeps local iPhone testing available through the public Expo Go app.
+It does not change the Supabase project, database schema, stored user data, or
+FitFlow features. Keep the Expo, React, React Native, Expo Router, Jest, and related
+native-package versions in `package.json` aligned with SDK 54.
+
+Upgrade beyond SDK 54 only when either a compatible Expo Go build is publicly
+available for physical iPhones or testing has moved completely to signed
+development/TestFlight builds. After any future SDK upgrade, run
+`npx expo install --fix`, `npm run doctor`, `npm run validate`, and a full
+multi-platform export.
+
 ## Environment
 
 Copy `.env.example` to `.env` and use the same public Supabase values as the web app:
