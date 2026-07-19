@@ -2,6 +2,7 @@
   "name": "fitflow-app",
   "main": "expo-router/entry",
   "version": "1.0.0",
+  "expoSdkPolicy": "PINNED TO EXPO SDK 54 FOR PUBLIC IOS EXPO GO 54.0.2. Read README.md and AGENTS.md before changing Expo, React, React Native, Expo Router, or native package versions.",
   "engines": {
     "node": ">=22.13.0"
   },

@@ -19,6 +19,7 @@ FitFlow Mobile is the Expo/React Native rewrite of the FitFlow web app. It targe
 - An Android emulator/device, iOS simulator/device, or an Expo development build
 - An Expo account for EAS cloud builds
 
+<!-- AGENT: Expo SDK 54 is intentional. Read this section before changing package versions. -->
 ## Expo SDK compatibility
 
 FitFlow is intentionally pinned to **Expo SDK 54**. The project originally used
