@@ -34,7 +34,6 @@ module.exports = ({ config }) => ({
     ['expo-secure-store', { configureAndroidBackup: true }],
     ['expo-notifications', { defaultChannel: 'rest-timers' }],
     '@react-native-community/datetimepicker',
-    'expo-sharing',
     [
       'expo-splash-screen',
       {
