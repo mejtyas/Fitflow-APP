@@ -1,9 +1,9 @@
-import type { Json } from '@/lib/database.types';
-import { workoutNameFromRelation } from '@/lib/format';
-import { supabase } from '@/lib/supabase';
+import { createId, getDatabase, nowIso, transaction, type Database } from '@/lib/db';
+import { displayName } from '@/lib/format';
+import { parseJson } from '@/lib/json';
 import { clampKg, clampReps, isLoggedSetReps } from '@/lib/validation';
 import { parseWarmupSettings, type WarmupSettings } from '@/lib/warmup';
-import { FitFlowError, requireData, throwOnError } from '@/services/shared';
+import { LixoError, requireRow } from '@/services/shared';
 
 export type ActiveSet = {
   id: string;
@@ -89,123 +89,137 @@ function mapRestRow(row: RestRow): RestTimerState {
   return { ...IDLE_REST };
 }
 
-async function sealOpenRestPeriods(sessionId: string, endedAt = new Date().toISOString()) {
-  const { error } = await supabase
-    .from('session_rest_periods')
-    .update({ ended_at: endedAt })
-    .eq('workout_session_id', sessionId)
-    .is('ended_at', null);
-  throwOnError(error);
+const REST_COLUMNS = 'rest_target_ms, rest_ends_at, rest_paused_remaining_ms';
+
+async function sealOpenRestPeriods(db: Database, sessionId: string, endedAt = nowIso()) {
+  await db.runAsync(
+    'UPDATE session_rest_periods SET ended_at = ? WHERE workout_session_id = ? AND ended_at IS NULL',
+    [endedAt, sessionId],
+  );
 }
 
-async function clearExpiredRest(userId: string, sessionId: string, row: RestRow) {
+async function writeRestRow(db: Database, sessionId: string, row: RestRow) {
+  await db.runAsync(
+    `UPDATE workout_sessions SET rest_target_ms = ?, rest_ends_at = ?, rest_paused_remaining_ms = ?
+      WHERE id = ? AND ended_at IS NULL`,
+    [row.rest_target_ms, row.rest_ends_at, row.rest_paused_remaining_ms, sessionId],
+  );
+  return row;
+}
+
+const CLEARED_REST: RestRow = { rest_target_ms: null, rest_ends_at: null, rest_paused_remaining_ms: null };
+
+async function clearExpiredRest(db: Database, sessionId: string, row: RestRow) {
   if (!row.rest_ends_at || new Date(row.rest_ends_at).getTime() > Date.now()) return mapRestRow(row);
-  await sealOpenRestPeriods(sessionId, row.rest_ends_at);
-  const result = await supabase
-    .from('workout_sessions')
-    .update({ rest_target_ms: null, rest_ends_at: null, rest_paused_remaining_ms: null })
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .is('ended_at', null);
-  throwOnError(result.error);
+  await sealOpenRestPeriods(db, sessionId, row.rest_ends_at);
+  await writeRestRow(db, sessionId, CLEARED_REST);
   return { ...IDLE_REST };
 }
 
-export async function fetchActiveWorkout(
-  userId: string,
-  selectedSessionId?: string | null,
-): Promise<ActiveWorkoutData | null> {
-  let sessionQuery = supabase
-    .from('workout_sessions')
-    .select('id, started_at, workouts(name), rest_target_ms, rest_ends_at, rest_paused_remaining_ms')
-    .eq('user_id', userId)
-    .is('ended_at', null);
-  sessionQuery = selectedSessionId
-    ? sessionQuery.eq('id', selectedSessionId)
-    : sessionQuery.order('started_at', { ascending: false }).limit(1);
-  const sessionResult = await sessionQuery.maybeSingle();
-  throwOnError(sessionResult.error);
-  const session = sessionResult.data;
+type SessionRow = RestRow & { id: string; started_at: string; workout_name: string | null };
+
+export async function fetchActiveWorkout(selectedSessionId?: string | null): Promise<ActiveWorkoutData | null> {
+  const db = await getDatabase();
+  const sessionSelect = `SELECT ws.id, ws.started_at, w.name AS workout_name,
+           ws.rest_target_ms, ws.rest_ends_at, ws.rest_paused_remaining_ms
+      FROM workout_sessions ws LEFT JOIN workouts w ON w.id = ws.workout_id WHERE ws.ended_at IS NULL`;
+  const session = selectedSessionId
+    ? await db.getFirstAsync<SessionRow>(`${sessionSelect} AND ws.id = ?`, [selectedSessionId])
+    : await db.getFirstAsync<SessionRow>(`${sessionSelect} ORDER BY ws.started_at DESC LIMIT 1`, []);
   if (!session) return null;
 
-  const [sessionExercisesResult, exerciseOptionsResult] = await Promise.all([
-    supabase
-      .from('session_exercises')
-      .select('id, order_index, exercise_id, exercises(name, description), session_sets(id, set_index, kg, reps, completed)')
-      .eq('workout_session_id', session.id)
-      .order('order_index'),
-    supabase
-      .from('exercises')
-      .select('id, name, description, warmup_settings')
-      .eq('user_id', userId)
-      .order('name'),
+  const [exerciseRows, setRows, optionRows] = await Promise.all([
+    db.getAllAsync<{ id: string; order_index: number; exercise_id: string; name: string | null; description: string | null }>(
+      `SELECT se.id, se.order_index, se.exercise_id, e.name, e.description
+         FROM session_exercises se LEFT JOIN exercises e ON e.id = se.exercise_id
+        WHERE se.workout_session_id = ?
+        ORDER BY se.order_index`,
+      [session.id],
+    ),
+    db.getAllAsync<{ id: string; session_exercise_id: string; set_index: number; kg: number | null; reps: number | null; completed: number }>(
+      `SELECT ss.id, ss.session_exercise_id, ss.set_index, ss.kg, ss.reps, ss.completed
+         FROM session_sets ss JOIN session_exercises se ON se.id = ss.session_exercise_id
+        WHERE se.workout_session_id = ?
+        ORDER BY ss.set_index`,
+      [session.id],
+    ),
+    db.getAllAsync<{ id: string; name: string; description: string | null; warmup_settings: string | null }>(
+      'SELECT id, name, description, warmup_settings FROM exercises ORDER BY name COLLATE NOCASE',
+      [],
+    ),
   ]);
-  throwOnError(sessionExercisesResult.error);
-  throwOnError(exerciseOptionsResult.error);
-  const optionRows = exerciseOptionsResult.data ?? [];
-  const settings = new Map(
-    optionRows.map((row) => [row.id, parseWarmupSettings(row.warmup_settings as Json | null)]),
-  );
-  const exerciseIds = [...new Set((sessionExercisesResult.data ?? []).map((row) => row.exercise_id))];
-  const pastResult = exerciseIds.length
-    ? await supabase
-        .from('session_exercises')
-        .select(`exercise_id, workout_session_id, workout_sessions!inner(id, user_id, started_at, ended_at, workouts(name)), session_sets(set_index, kg, reps)`)
-        .in('exercise_id', exerciseIds)
-        .eq('workout_sessions.user_id', userId)
-        .neq('workout_session_id', session.id)
-        .not('workout_sessions.ended_at', 'is', null)
-        .order('workout_sessions(ended_at)', { ascending: false })
-    : { data: [], error: null };
-  throwOnError(pastResult.error);
+  const settings = new Map(optionRows.map((row) => [row.id, parseWarmupSettings(parseJson(row.warmup_settings))]));
+
+  const exerciseIds = [...new Set(exerciseRows.map((row) => row.exercise_id))];
+  const pastRows = exerciseIds.length
+    ? await db.getAllAsync<{
+        exercise_id: string;
+        session_exercise_id: string;
+        session_id: string;
+        started_at: string;
+        ended_at: string;
+        workout_name: string | null;
+        set_index: number | null;
+        kg: number | null;
+        reps: number | null;
+      }>(
+        `SELECT se.exercise_id, se.id AS session_exercise_id, ws.id AS session_id, ws.started_at, ws.ended_at,
+                w.name AS workout_name, ss.set_index, ss.kg, ss.reps
+           FROM session_exercises se
+           JOIN workout_sessions ws ON ws.id = se.workout_session_id
+           LEFT JOIN workouts w ON w.id = ws.workout_id
+           LEFT JOIN session_sets ss ON ss.session_exercise_id = se.id
+          WHERE se.exercise_id IN (${exerciseIds.map(() => '?').join(', ')})
+            AND ws.id <> ? AND ws.ended_at IS NOT NULL
+          ORDER BY ws.ended_at DESC, se.id, ss.set_index`,
+        [...exerciseIds, session.id],
+      )
+    : [];
 
   const pastByExercise = new Map<string, PastSessionPerformance[]>();
-  for (const row of pastResult.data ?? []) {
-    const existing = pastByExercise.get(row.exercise_id) ?? [];
-    if (existing.length >= 6) continue;
-    const relation = row.workout_sessions;
-    const pastSession = Array.isArray(relation) ? relation[0] : relation;
-    if (!pastSession?.ended_at) continue;
-    existing.push({
-      sessionId: pastSession.id,
-      startedAt: pastSession.started_at,
-      endedAt: pastSession.ended_at,
-      workoutName: workoutNameFromRelation(pastSession.workouts),
-      sets: [...(row.session_sets ?? [])]
-        .filter((set) => isLoggedSetReps(set.reps))
-        .sort((a, b) => a.set_index - b.set_index)
-        .map((set) => ({ kg: set.kg, reps: set.reps })),
-    });
-    pastByExercise.set(row.exercise_id, existing);
+  const pastBySessionExercise = new Map<string, PastSessionPerformance>();
+  for (const row of pastRows) {
+    let past = pastBySessionExercise.get(row.session_exercise_id);
+    if (!past) {
+      const existing = pastByExercise.get(row.exercise_id) ?? [];
+      if (existing.length >= 6) continue;
+      past = {
+        sessionId: row.session_id,
+        startedAt: row.started_at,
+        endedAt: row.ended_at,
+        workoutName: displayName(row.workout_name),
+        sets: [],
+      };
+      existing.push(past);
+      pastByExercise.set(row.exercise_id, existing);
+      pastBySessionExercise.set(row.session_exercise_id, past);
+    }
+    if (isLoggedSetReps(row.reps)) past.sets.push({ kg: row.kg, reps: row.reps });
   }
 
-  const rest = await clearExpiredRest(userId, session.id, {
-    rest_target_ms: session.rest_target_ms,
-    rest_ends_at: session.rest_ends_at,
-    rest_paused_remaining_ms: session.rest_paused_remaining_ms,
-  });
+  const restExpired = session.rest_ends_at !== null && new Date(session.rest_ends_at).getTime() <= Date.now();
+  const rest = restExpired
+    ? await transaction((txn) => clearExpiredRest(txn, session.id, session))
+    : mapRestRow(session);
 
   return {
     sessionId: session.id,
     startedAt: session.started_at,
-    workoutName: workoutNameFromRelation(session.workouts, 'Unnamed Session'),
-    exercises: (sessionExercisesResult.data ?? []).map((row) => ({
+    workoutName: displayName(session.workout_name, 'Unnamed Session'),
+    exercises: exerciseRows.map((row) => ({
       id: row.id,
       orderIndex: row.order_index,
       exerciseId: row.exercise_id,
-      name: workoutNameFromRelation(row.exercises, '?'),
-      description: (() => {
-        const relation = Array.isArray(row.exercises) ? row.exercises[0] : row.exercises;
-        return relation?.description ?? null;
-      })(),
-      sets: [...(row.session_sets ?? [])]
-        .sort((a, b) => a.set_index - b.set_index)
+      name: displayName(row.name, '?'),
+      description: row.description,
+      sets: setRows
+        .filter((set) => set.session_exercise_id === row.id)
         .map((set) => ({
           id: set.id,
           setIndex: set.set_index,
           kg: set.kg,
           reps: set.reps,
-          completed: set.completed === true,
+          completed: set.completed === 1,
         })),
       pastSessions: pastByExercise.get(row.exercise_id) ?? [],
       warmupSettings: settings.get(row.exercise_id) ?? parseWarmupSettings(null),
@@ -226,60 +240,75 @@ export type SetPatch = {
   completed?: boolean;
 };
 
-export async function persistActiveSet(setId: string, patch: SetPatch) {
-  const payload: SetPatch = {};
-  if (patch.kg !== undefined) payload.kg = clampKg(patch.kg) ?? null;
-  if (patch.reps !== undefined) payload.reps = clampReps(patch.reps) ?? null;
-  if (patch.completed !== undefined) payload.completed = patch.completed;
-  if (Object.keys(payload).length === 0) return;
-  const result = await supabase
-    .from('session_sets')
-    .update(payload)
-    .eq('id', setId)
-    .select('session_exercise_id')
-    .single();
-  const row = requireData(result.data, result.error, 'Set not found.');
-  if (patch.kg !== undefined || patch.reps !== undefined) {
-    const { error } = await supabase.rpc('record_session_exercise_first_log', {
-      p_session_exercise_id: row.session_exercise_id,
-    });
-    throwOnError(error);
-  }
+/** Mirrors the web's `record_session_exercise_first_log`: stamps the order in which exercises got their first data. */
+async function recordFirstLog(db: Database, sessionExerciseId: string) {
+  const sessionExercise = await db.getFirstAsync<{ workout_session_id: string; logged_order: number | null }>(
+    'SELECT workout_session_id, logged_order FROM session_exercises WHERE id = ?',
+    [sessionExerciseId],
+  );
+  if (!sessionExercise || sessionExercise.logged_order !== null) return;
+  const hasData = await db.getFirstAsync<{ found: number }>(
+    'SELECT 1 AS found FROM session_sets WHERE session_exercise_id = ? AND (kg IS NOT NULL OR reps IS NOT NULL) LIMIT 1',
+    [sessionExerciseId],
+  );
+  if (!hasData) return;
+  const session = await db.getFirstAsync<{ next_logged_order: number }>(
+    'SELECT next_logged_order FROM workout_sessions WHERE id = ?',
+    [sessionExercise.workout_session_id],
+  );
+  if (!session) return;
+  await db.runAsync(
+    'UPDATE session_exercises SET logged_order = ?, first_logged_at = ? WHERE id = ? AND logged_order IS NULL',
+    [session.next_logged_order, nowIso(), sessionExerciseId],
+  );
+  await db.runAsync('UPDATE workout_sessions SET next_logged_order = next_logged_order + 1 WHERE id = ?', [
+    sessionExercise.workout_session_id,
+  ]);
 }
 
-export async function addSet(sessionExerciseId: string) {
-  const maxResult = await supabase
-    .from('session_sets')
-    .select('set_index')
-    .eq('session_exercise_id', sessionExerciseId)
-    .order('set_index', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  throwOnError(maxResult.error);
-  const result = await supabase
-    .from('session_sets')
-    .insert({
-      session_exercise_id: sessionExerciseId,
-      set_index: (maxResult.data?.set_index ?? -1) + 1,
-      kg: null,
-      reps: null,
-      completed: false,
-    })
-    .select('id, set_index, kg, reps, completed')
-    .single();
-  const set = requireData(result.data, result.error, 'Could not add set.');
-  return {
-    id: set.id,
-    setIndex: set.set_index,
-    kg: set.kg,
-    reps: set.reps,
-    completed: set.completed,
-  } satisfies ActiveSet;
+export async function persistActiveSet(setId: string, patch: SetPatch) {
+  const assignments: string[] = [];
+  const values: (number | null)[] = [];
+  if (patch.kg !== undefined) {
+    assignments.push('kg = ?');
+    values.push(clampKg(patch.kg) ?? null);
+  }
+  if (patch.reps !== undefined) {
+    assignments.push('reps = ?');
+    values.push(clampReps(patch.reps) ?? null);
+  }
+  if (patch.completed !== undefined) {
+    assignments.push('completed = ?');
+    values.push(patch.completed ? 1 : 0);
+  }
+  if (assignments.length === 0) return;
+  await transaction(async (db) => {
+    const set = requireRow(
+      await db.getFirstAsync<{ session_exercise_id: string }>('SELECT session_exercise_id FROM session_sets WHERE id = ?', [setId]),
+      'Set not found.',
+    );
+    await db.runAsync(`UPDATE session_sets SET ${assignments.join(', ')} WHERE id = ?`, [...values, setId]);
+    if (patch.kg !== undefined || patch.reps !== undefined) await recordFirstLog(db, set.session_exercise_id);
+  });
+}
+
+export async function addSet(sessionExerciseId: string): Promise<ActiveSet> {
+  return transaction(async (db) => {
+    const max = await db.getFirstAsync<{ max_index: number | null }>(
+      'SELECT MAX(set_index) AS max_index FROM session_sets WHERE session_exercise_id = ?',
+      [sessionExerciseId],
+    );
+    const set: ActiveSet = { id: createId(), setIndex: (max?.max_index ?? -1) + 1, kg: null, reps: null, completed: false };
+    await db.runAsync(
+      'INSERT INTO session_sets (id, session_exercise_id, set_index, kg, reps, completed) VALUES (?, ?, ?, NULL, NULL, 0)',
+      [set.id, sessionExerciseId, set.setIndex],
+    );
+    return set;
+  });
 }
 
 export async function deleteSet(setId: string) {
-  const { error } = await supabase.from('session_sets').delete().eq('id', setId);
-  throwOnError(error);
+  await transaction((db) => db.runAsync('DELETE FROM session_sets WHERE id = ?', [setId]));
 }
 
 export async function addExerciseToActiveSession(
@@ -288,50 +317,45 @@ export async function addExerciseToActiveSession(
   orderIndex: number,
   shifts: { id: string; orderIndex: number }[],
 ) {
-  const result = await supabase.rpc('add_exercise_to_session', {
-    p_session_id: sessionId,
-    p_exercise_id: exerciseId,
-    p_order_index: orderIndex,
-    p_shift_ids: shifts.map((shift) => shift.id),
-    p_shift_orders: shifts.map((shift) => shift.orderIndex),
+  await transaction(async (db) => {
+    const session = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM workout_sessions WHERE id = ? AND ended_at IS NULL',
+      [sessionId],
+    );
+    if (!session) throw new LixoError('Active session not found.');
+    for (const shift of shifts) {
+      await db.runAsync('UPDATE session_exercises SET order_index = ? WHERE id = ? AND workout_session_id = ?', [
+        shift.orderIndex,
+        shift.id,
+        sessionId,
+      ]);
+    }
+    const sessionExerciseId = createId();
+    await db.runAsync(
+      'INSERT INTO session_exercises (id, workout_session_id, exercise_id, order_index) VALUES (?, ?, ?, ?)',
+      [sessionExerciseId, sessionId, exerciseId, orderIndex],
+    );
+    await db.runAsync(
+      'INSERT INTO session_sets (id, session_exercise_id, set_index, kg, reps, completed) VALUES (?, ?, 0, NULL, NULL, 0)',
+      [createId(), sessionExerciseId],
+    );
   });
-  throwOnError(result.error);
-  if (!result.data || typeof result.data !== 'object' || Array.isArray(result.data)) {
-    throw new FitFlowError('Invalid response while adding exercise.');
-  }
 }
 
 export async function removeExerciseFromActiveSession(sessionId: string, sessionExerciseId: string) {
-  const removeResult = await supabase
-    .from('session_exercises')
-    .delete()
-    .eq('id', sessionExerciseId)
-    .eq('workout_session_id', sessionId);
-  throwOnError(removeResult.error);
-  const remainingResult = await supabase
-    .from('session_exercises')
-    .select('id')
-    .eq('workout_session_id', sessionId)
-    .order('order_index');
-  throwOnError(remainingResult.error);
-  const updates = await Promise.all(
-    (remainingResult.data ?? []).map((row, index) =>
-      supabase.from('session_exercises').update({ order_index: index }).eq('id', row.id),
-    ),
-  );
-  const failure = updates.find((result) => result.error)?.error;
-  throwOnError(failure ?? null);
-}
-
-async function readActiveRestRow(userId: string, sessionId: string) {
-  const result = await supabase
-    .from('workout_sessions')
-    .select('rest_target_ms, rest_ends_at, rest_paused_remaining_ms')
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .is('ended_at', null)
-    .single();
-  return requireData(result.data, result.error, 'Active session not found.') as RestRow;
+  await transaction(async (db) => {
+    await db.runAsync('DELETE FROM session_exercises WHERE id = ? AND workout_session_id = ?', [
+      sessionExerciseId,
+      sessionId,
+    ]);
+    const remaining = await db.getAllAsync<{ id: string }>(
+      'SELECT id FROM session_exercises WHERE workout_session_id = ? ORDER BY order_index',
+      [sessionId],
+    );
+    for (const [index, row] of remaining.entries()) {
+      await db.runAsync('UPDATE session_exercises SET order_index = ? WHERE id = ?', [index, row.id]);
+    }
+  });
 }
 
 export type RestTimerOperation =
@@ -342,115 +366,87 @@ export type RestTimerOperation =
   | { kind: 'restart' }
   | { kind: 'stop' };
 
-export async function applyRestTimerOperation(
-  userId: string,
-  sessionId: string,
-  operation: RestTimerOperation,
-): Promise<RestTimerState> {
-  let row = await readActiveRestRow(userId, sessionId);
-  if (row.rest_ends_at && new Date(row.rest_ends_at).getTime() <= Date.now()) {
-    return clearExpiredRest(userId, sessionId, row);
-  }
-  if (operation.kind === 'pull') return mapRestRow(row);
+export async function applyRestTimerOperation(sessionId: string, operation: RestTimerOperation): Promise<RestTimerState> {
+  return transaction(async (db) => {
+    const row = requireRow(
+      await db.getFirstAsync<RestRow>(
+        `SELECT ${REST_COLUMNS} FROM workout_sessions WHERE id = ? AND ended_at IS NULL`,
+        [sessionId],
+      ),
+      'Active session not found.',
+    );
+    if (row.rest_ends_at && new Date(row.rest_ends_at).getTime() <= Date.now()) {
+      return clearExpiredRest(db, sessionId, row);
+    }
+    if (operation.kind === 'pull') return mapRestRow(row);
 
-  const update = async (payload: RestRow) => {
-    const result = await supabase
-      .from('workout_sessions')
-      .update(payload)
-      .eq('id', sessionId)
-      .eq('user_id', userId)
-      .is('ended_at', null)
-      .select('rest_target_ms, rest_ends_at, rest_paused_remaining_ms')
-      .single();
-    return requireData(result.data, result.error, 'Could not update rest timer.') as RestRow;
-  };
+    if (operation.kind === 'stop') {
+      await sealOpenRestPeriods(db, sessionId);
+      return mapRestRow(await writeRestRow(db, sessionId, CLEARED_REST));
+    }
 
-  if (operation.kind === 'stop') {
-    await sealOpenRestPeriods(sessionId);
-    row = await update({ rest_target_ms: null, rest_ends_at: null, rest_paused_remaining_ms: null });
-    return mapRestRow(row);
-  }
+    if (operation.kind === 'start' || operation.kind === 'restart') {
+      const durationMs =
+        operation.kind === 'start' ? Math.max(1000, Math.floor(operation.durationMs)) : row.rest_target_ms;
+      if (!durationMs) throw new LixoError('No rest target to restart.');
+      const now = new Date();
+      await sealOpenRestPeriods(db, sessionId, now.toISOString());
+      await db.runAsync(
+        `INSERT INTO session_rest_periods (id, workout_session_id, started_at, ended_at, planned_target_ms)
+         VALUES (?, ?, ?, NULL, ?)`,
+        [createId(), sessionId, now.toISOString(), durationMs],
+      );
+      return mapRestRow(
+        await writeRestRow(db, sessionId, {
+          rest_target_ms: durationMs,
+          rest_ends_at: new Date(now.getTime() + durationMs).toISOString(),
+          rest_paused_remaining_ms: null,
+        }),
+      );
+    }
 
-  if (operation.kind === 'start' || operation.kind === 'restart') {
-    const durationMs =
-      operation.kind === 'start'
-        ? Math.max(1000, Math.floor(operation.durationMs))
-        : row.rest_target_ms;
-    if (!durationMs) throw new FitFlowError('No rest target to restart.');
-    const now = new Date();
-    await sealOpenRestPeriods(sessionId, now.toISOString());
-    const insert = await supabase.from('session_rest_periods').insert({
-      workout_session_id: sessionId,
-      started_at: now.toISOString(),
-      ended_at: null,
-      planned_target_ms: durationMs,
-    });
-    throwOnError(insert.error);
-    row = await update({
-      rest_target_ms: durationMs,
-      rest_ends_at: new Date(now.getTime() + durationMs).toISOString(),
-      rest_paused_remaining_ms: null,
-    });
-    return mapRestRow(row);
-  }
+    if (operation.kind === 'pause') {
+      if (!row.rest_ends_at || row.rest_target_ms === null) return mapRestRow(row);
+      return mapRestRow(
+        await writeRestRow(db, sessionId, {
+          rest_target_ms: row.rest_target_ms,
+          rest_ends_at: null,
+          rest_paused_remaining_ms: Math.max(0, new Date(row.rest_ends_at).getTime() - Date.now()),
+        }),
+      );
+    }
 
-  if (operation.kind === 'pause') {
-    if (!row.rest_ends_at || row.rest_target_ms === null) return mapRestRow(row);
-    const remaining = Math.max(0, new Date(row.rest_ends_at).getTime() - Date.now());
-    row = await update({
-      rest_target_ms: row.rest_target_ms,
-      rest_ends_at: null,
-      rest_paused_remaining_ms: remaining,
-    });
-    return mapRestRow(row);
-  }
-
-  if (row.rest_paused_remaining_ms === null || row.rest_target_ms === null) return mapRestRow(row);
-  if (row.rest_paused_remaining_ms <= 0) {
-    await sealOpenRestPeriods(sessionId);
-    row = await update({ rest_target_ms: null, rest_ends_at: null, rest_paused_remaining_ms: null });
-    return mapRestRow(row);
-  }
-  row = await update({
-    rest_target_ms: row.rest_target_ms,
-    rest_ends_at: new Date(Date.now() + row.rest_paused_remaining_ms).toISOString(),
-    rest_paused_remaining_ms: null,
+    if (row.rest_paused_remaining_ms === null || row.rest_target_ms === null) return mapRestRow(row);
+    if (row.rest_paused_remaining_ms <= 0) {
+      await sealOpenRestPeriods(db, sessionId);
+      return mapRestRow(await writeRestRow(db, sessionId, CLEARED_REST));
+    }
+    return mapRestRow(
+      await writeRestRow(db, sessionId, {
+        rest_target_ms: row.rest_target_ms,
+        rest_ends_at: new Date(Date.now() + row.rest_paused_remaining_ms).toISOString(),
+        rest_paused_remaining_ms: null,
+      }),
+    );
   });
-  return mapRestRow(row);
 }
 
-export async function endActiveWorkout(userId: string, sessionId: string) {
-  const exerciseResult = await supabase
-    .from('session_exercises')
-    .select('session_sets(id, reps)')
-    .eq('workout_session_id', sessionId);
-  throwOnError(exerciseResult.error);
-  const invalidSetIds = (exerciseResult.data ?? []).flatMap((row) =>
-    (row.session_sets ?? []).filter((set) => !isLoggedSetReps(set.reps)).map((set) => set.id),
-  );
-  if (invalidSetIds.length > 0) {
-    const purge = await supabase.from('session_sets').delete().in('id', invalidSetIds);
-    throwOnError(purge.error);
-  }
-  const endedAt = new Date().toISOString();
-  await sealOpenRestPeriods(sessionId, endedAt);
-  const payload = {
-    ended_at: endedAt,
-    rest_target_ms: null,
-    rest_ends_at: null,
-    rest_paused_remaining_ms: null,
-  };
-  const primary = await supabase
-    .from('workout_sessions')
-    .update(payload)
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .is('ended_at', null);
-  throwOnError(primary.error);
-  const zombies = await supabase
-    .from('workout_sessions')
-    .update(payload)
-    .eq('user_id', userId)
-    .is('ended_at', null);
-  throwOnError(zombies.error);
+export async function endActiveWorkout(sessionId: string) {
+  await transaction(async (db) => {
+    await db.runAsync(
+      `DELETE FROM session_sets
+        WHERE session_exercise_id IN (SELECT id FROM session_exercises WHERE workout_session_id = ?)
+          AND (reps IS NULL OR reps < 1)`,
+      [sessionId],
+    );
+    const endedAt = nowIso();
+    await sealOpenRestPeriods(db, sessionId, endedAt);
+    // Close the requested session and any other zombie session left open.
+    await db.runAsync(
+      `UPDATE workout_sessions
+          SET ended_at = ?, rest_target_ms = NULL, rest_ends_at = NULL, rest_paused_remaining_ms = NULL
+        WHERE ended_at IS NULL`,
+      [endedAt],
+    );
+  });
 }

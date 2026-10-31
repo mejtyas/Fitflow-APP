@@ -1,12 +1,7 @@
-import NetInfo from '@react-native-community/netinfo';
-import { focusManager, onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PropsWithChildren } from 'react';
 import { useEffect, useState } from 'react';
 import { AppState, Platform } from 'react-native';
-
-onlineManager.setEventListener((setOnline) =>
-  NetInfo.addEventListener((state) => setOnline(Boolean(state.isConnected))),
-);
 
 export function AppQueryProvider({ children }: PropsWithChildren) {
   const [client] = useState(
@@ -14,12 +9,14 @@ export function AppQueryProvider({ children }: PropsWithChildren) {
       new QueryClient({
         defaultOptions: {
           queries: {
+            // Data lives in the on-device database, so queries never wait for a network.
+            networkMode: 'always',
             staleTime: 30_000,
             gcTime: 10 * 60_000,
-            retry: 2,
-            refetchOnReconnect: true,
+            retry: 1,
+            refetchOnReconnect: false,
           },
-          mutations: { retry: 0 },
+          mutations: { networkMode: 'always', retry: 0 },
         },
       }),
   );

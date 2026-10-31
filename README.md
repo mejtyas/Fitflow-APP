@@ -1,16 +1,16 @@
-# FitFlow Mobile
+# Lixo Mobile
 
-FitFlow Mobile is the Expo/React Native rewrite of the FitFlow web app. It targets Android and iOS, connects directly to the existing Supabase project, and keeps the current schema, users, workouts, exercises, sessions, history, statistics, and feedback data.
+Lixo Mobile is the Expo/React Native version of the Lixo workout tracker for Android and iOS. All data lives in a local SQLite database on the device: there is no account, no server, and the app works fully offline.
 
 ## Included
 
-- Email/password sign-in, registration, session restore, and sign-out
+- No sign-in: the app opens straight to the dashboard
 - Dashboard summaries, weekly rhythm, recent activity, and active-session resume
 - Workout and exercise creation, editing, ordering, search, deletion, and notes
 - Live workout logging with kg/reps, previous performance, warm-up suggestions, per-exercise rest settings, local crash recovery, and background rest notifications
 - Workout history, editable timestamps and rest periods, delete/clear controls, CSV export, and native XLSX export
-- Exercise progress charts, estimated one-rep max, statistics, feedback, and account settings
-- Encrypted native auth persistence through SecureStore and user-scoped Supabase queries protected by the existing RLS policies
+- Exercise progress charts, estimated one-rep max, statistics, local notes, and settings
+- On-device SQLite storage (`expo-sqlite`) with versioned schema migrations and transactional writes
 
 ## Requirements
 
@@ -22,15 +22,14 @@ FitFlow Mobile is the Expo/React Native rewrite of the FitFlow web app. It targe
 <!-- AGENT: Expo SDK 54 is intentional. Read this section before changing package versions. -->
 ## Expo SDK compatibility
 
-FitFlow is intentionally pinned to **Expo SDK 54**. The project originally used
+Lixo is intentionally pinned to **Expo SDK 54**. The project originally used
 SDK 57, but the public Expo Go build available from the iOS App Store is version
 54.0.2 and cannot load SDK 57 projects. The App Store can still report Expo Go as
 fully updated because Apple does not allow a different SDK-specific Expo Go build
 to be sideloaded onto a physical iPhone.
 
 The downgrade keeps local iPhone testing available through the public Expo Go app.
-It does not change the Supabase project, database schema, stored user data, or
-FitFlow features. Keep the Expo, React, React Native, Expo Router, Jest, and related
+It does not change the database schema, stored data, or Lixo features. Keep the Expo, React, React Native, Expo Router, Jest, and related
 native-package versions in `package.json` aligned with SDK 54.
 
 Upgrade beyond SDK 54 only when either a compatible Expo Go build is publicly
@@ -38,17 +37,6 @@ available for physical iPhones or testing has moved completely to signed
 development/TestFlight builds. After any future SDK upgrade, run
 `npx expo install --fix`, `npm run doctor`, `npm run validate`, and a full
 multi-platform export.
-
-## Environment
-
-Copy `.env.example` to `.env` and use the same public Supabase values as the web app:
-
-```dotenv
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your-publishable-key
-```
-
-Only the publishable/anon client key belongs in the app. Never add a Supabase service-role key. `.env` and EAS local files are ignored by Git.
 
 ## Local development
 
@@ -67,7 +55,7 @@ npx expo install --check
 npx expo export --platform all
 ```
 
-Because FitFlow uses native notification and secure-storage modules, a development build is the representative test environment:
+Because Lixo uses native notification modules, a development build is the representative test environment:
 
 ```bash
 npx eas-cli build --platform android --profile development
@@ -77,40 +65,44 @@ npm run dev
 
 ## EAS setup and releases
 
-The three profiles in `eas.json` map to the EAS `development`, `preview`, and `production` environments. Add both environment variables to all three environments in the Expo dashboard or with EAS CLI, preserving their names exactly.
+The app needs no environment variables. The EAS project is `@mejtyas/fitflow-app` (the `slug` in `app.config.js` must stay `fitflow-app` to match `extra.eas.projectId`). Build numbers are managed remotely by EAS (`appVersionSource: remote`).
 
-Link the repository to the Expo project once, then build:
+Build and ship:
 
 ```bash
 npx eas-cli login
-npx eas-cli init
 npm run build:android:preview
 npm run build:ios:preview
 npm run build:ios:simulator
 npm run build:all
+npm run submit:ios      # uploads the latest iOS production build to TestFlight
 ```
 
-The Android package and iOS bundle identifier are both `com.mejtyas.fitflow`. Production credentials remain managed by the owning Expo/Apple/Google accounts and are intentionally not committed.
+The iOS bundle identifier is `com.fitflow.lixo` (App Store Connect app "Lixo Fitness", Apple ID `6792464629`). The Android package is `com.mejtyas.lixo`. Production credentials remain managed by the owning Expo/Apple/Google accounts and are intentionally not committed.
 
 ## Data and failure safety
 
-The mobile app does not create a second database or copy user records. It uses the original tables and RPC functions through the same Supabase URL. Auth refresh tokens are chunked and encrypted in platform SecureStore. Active set edits are mirrored locally, saved with a short debounce to avoid redundant requests, flushed when the app backgrounds, and must successfully sync before a workout can be finished. React Query deduplicates and caches reads while reconnect and foreground handlers refresh stale data.
+Data is stored in `lixo.db`, a SQLite database in the app's sandbox. The schema lives in `src/lib/db.ts`; each release appends migrations there and the app upgrades the database on launch using `PRAGMA user_version`. Never edit a shipped migration. Every mutation runs in an immediate transaction through one serialized write queue, and foreign keys cascade session, set and rest-period deletes. Exercises that appear in workout history cannot be deleted.
 
-Destructive operations require confirmation, and deleting all account data requires two confirmations. Supabase Row Level Security remains the final authorization boundary for every mobile request.
+Active set edits are mirrored to AsyncStorage, saved with a short debounce, flushed when the app backgrounds, and must be saved before a workout can be finished.
+
+Uninstalling the app deletes its data. Use the CSV/XLSX export in History to keep a backup. Destructive operations require confirmation, and deleting all data requires two confirmations.
+
+On web, `expo-sqlite` uses wa-sqlite with OPFS: `metro.config.js` adds the `.wasm` asset and the cross-origin isolation headers, and only one browser tab can hold the database open at a time.
 
 ## Project layout
 
 - `src/app` — Expo Router screens and navigation
 - `src/components` — reusable mobile UI and chart/input components
 - `src/hooks` — active-workout state, local recovery, debounced persistence, and timer orchestration
-- `src/services` — typed Supabase queries and mutations
-- `src/lib` — validation, metrics, formatting, secure persistence, notifications, and generated database types
-- `__tests__` — Jest unit and component tests
+- `src/services` — typed SQLite queries and mutations
+- `src/lib` — database and migrations (`db.ts`), validation, metrics, formatting, notifications
+- `__tests__` — Jest unit, component, and service tests; service tests run against an in-memory SQLite database (`jest/node-sqlite.ts`, Node's built-in `node:sqlite`)
 
 ## Release checklist
 
 1. Run `npm ci` and `npm run validate` on a clean checkout.
 2. Run `npm run doctor`, `npx expo install --check`, and `npx expo export --platform all`.
-3. Test sign-in, a complete workout, timer notification, history export, and account deletion against a non-production test account on one Android and one iOS device.
+3. Test a complete workout, app restart mid-workout, timer notification, history export, and data deletion on one Android and one iOS device.
 4. Build preview binaries and complete platform store privacy, screenshots, signing, and internal-testing requirements.
 5. Build the production artifacts with `npm run build:all`.

@@ -82,7 +82,7 @@ describe('active workout persistence', () => {
   });
 
   test('prefills follower weights and completes a valid set on reps blur', async () => {
-    const { result } = await renderHook(() => useActiveWorkout(data, 'user-1'));
+    const { result } = await renderHook(() => useActiveWorkout(data));
     expect(result.current).not.toBeNull();
 
     await act(() => result.current.changeSetValue(result.current.exercises[0]!, 'set-1', 'kg', 100));
@@ -96,7 +96,7 @@ describe('active workout persistence', () => {
   });
 
   test('debounces repeated edits to one latest network save', async () => {
-    const { result } = await renderHook(() => useActiveWorkout(data, 'user-1'));
+    const { result } = await renderHook(() => useActiveWorkout(data));
     expect(result.current).not.toBeNull();
 
     await act(() => {
@@ -114,7 +114,7 @@ describe('active workout persistence', () => {
 
   test('does not finish or purge a workout when set sync fails', async () => {
     jest.mocked(persistActiveSet).mockRejectedValue(new Error('offline'));
-    const { result } = await renderHook(() => useActiveWorkout(data, 'user-1'));
+    const { result } = await renderHook(() => useActiveWorkout(data));
     expect(result.current).not.toBeNull();
     await act(() => result.current.changeSetValue(result.current.exercises[0]!, 'set-1', 'reps', 6));
 
@@ -129,7 +129,7 @@ describe('active workout persistence', () => {
   });
 
   test('clears recovery state and does not recreate it after a successful finish', async () => {
-    const { result, unmount } = await renderHook(() => useActiveWorkout(data, 'user-1'));
+    const { result, unmount } = await renderHook(() => useActiveWorkout(data));
     await act(() => result.current.changeSetValue(result.current.exercises[0]!, 'set-1', 'reps', 5));
 
     let finished = false;
@@ -140,7 +140,7 @@ describe('active workout persistence', () => {
     await act(() => jest.runOnlyPendingTimers());
 
     expect(finished).toBe(true);
-    expect(endActiveWorkout).toHaveBeenCalledWith('user-1', 'session-1');
+    expect(endActiveWorkout).toHaveBeenCalledWith('session-1');
     expect(clearActiveMirror).toHaveBeenCalledWith('session-1');
     expect(writeActiveMirror).not.toHaveBeenCalled();
   });

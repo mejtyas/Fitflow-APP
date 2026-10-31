@@ -82,7 +82,7 @@ export function Brand({ compact = false }: { compact?: boolean }) {
         <Text style={[styles.brandMarkText, compact && styles.brandMarkTextCompact]}>F</Text>
       </View>
       <Text style={[styles.brandText, compact && styles.brandTextCompact]}>
-        FitFlow<Text style={styles.brandDot}>.</Text>
+        Lixo<Text style={styles.brandDot}>.</Text>
       </Text>
     </View>
   );

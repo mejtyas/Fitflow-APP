@@ -6,13 +6,10 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, EmptyState, ErrorBanner, Field, LoadingScreen, PageHeader, Screen } from '@/components/ui';
 import { colors, fonts, radius } from '@/constants/theme';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { createExercise, deleteExercise, fetchExercises, updateExercise, type ExerciseListItem } from '@/services/exercises';
 import { errorMessage } from '@/services/shared';
 
 export default function ExercisesScreen() {
-  const { user } = useAuth();
-  const userId = user!.id;
   const router = useRouter();
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
@@ -21,17 +18,17 @@ export default function ExercisesScreen() {
   const [editing, setEditing] = useState<ExerciseListItem | null>(null);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
-  const query = useQuery({ queryKey: queryKeys.exercises(userId), queryFn: () => fetchExercises(userId) });
+  const query = useQuery({ queryKey: queryKeys.exercises(), queryFn: () => fetchExercises() });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.all });
   const create = useMutation({
-    mutationFn: () => createExercise(userId, name, description),
+    mutationFn: () => createExercise(name, description),
     onSuccess: async () => { setName(''); setDescription(''); await invalidate(); },
   });
   const update = useMutation({
-    mutationFn: () => updateExercise(userId, editing!.id, editName, editDescription),
+    mutationFn: () => updateExercise(editing!.id, editName, editDescription),
     onSuccess: async () => { setEditing(null); await invalidate(); },
   });
-  const remove = useMutation({ mutationFn: (id: string) => deleteExercise(userId, id), onSuccess: invalidate });
+  const remove = useMutation({ mutationFn: (id: string) => deleteExercise(id), onSuccess: invalidate });
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -44,7 +41,7 @@ export default function ExercisesScreen() {
   };
   const confirmDelete = (item: ExerciseListItem) => Alert.alert(
     'Delete exercise?',
-    `${item.name} will also be removed from saved routines. Completed history remains readable where the database relationship allows it.`,
+    `${item.name} will also be removed from saved routines. Exercises that appear in your workout history cannot be deleted.`,
     [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => remove.mutate(item.id) }],
   );
 

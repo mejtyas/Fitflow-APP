@@ -1,6 +1,5 @@
-import { supabase } from '@/lib/supabase';
-import { workoutNameFromRelation } from '@/lib/format';
-import { throwOnError } from '@/services/shared';
+import { getDatabase } from '@/lib/db';
+import { displayName } from '@/lib/format';
 
 export type DashboardData = {
   activeSession: { id: string; startedAt: string; workoutName: string } | null;
@@ -13,56 +12,32 @@ export type DashboardData = {
   activeDates: string[];
 };
 
-export async function fetchDashboard(userId: string): Promise<DashboardData> {
+export async function fetchDashboard(): Promise<DashboardData> {
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const [active, last, count, recent, movements, workouts] = await Promise.all([
-    supabase
-      .from('workout_sessions')
-      .select('id, started_at, workouts(name)')
-      .eq('user_id', userId)
-      .is('ended_at', null)
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('workout_sessions')
-      .select('id, started_at, ended_at, workouts(name)')
-      .eq('user_id', userId)
-      .not('ended_at', 'is', null)
-      .order('ended_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('workout_sessions')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .not('ended_at', 'is', null),
-    supabase
-      .from('workout_sessions')
-      .select('started_at, ended_at')
-      .eq('user_id', userId)
-      .not('ended_at', 'is', null)
-      .gte('ended_at', thirtyDaysAgo.toISOString()),
-    supabase
-      .from('session_exercises')
-      .select('exercise_id, workout_sessions!inner(user_id)')
-      .eq('workout_sessions.user_id', userId),
-    supabase.from('workouts').select('id, name').eq('user_id', userId).order('name'),
+  const db = await getDatabase();
+  type SessionRow = { id: string; started_at: string; ended_at: string | null; workout_name: string | null };
+  const sessionSelect = `SELECT ws.id, ws.started_at, ws.ended_at, w.name AS workout_name
+    FROM workout_sessions ws LEFT JOIN workouts w ON w.id = ws.workout_id`;
+  const [activeRow, lastRow, count, recentRows, movements, workouts] = await Promise.all([
+    db.getFirstAsync<SessionRow>(`${sessionSelect} WHERE ws.ended_at IS NULL ORDER BY ws.started_at DESC LIMIT 1`, []),
+    db.getFirstAsync<SessionRow>(`${sessionSelect} WHERE ws.ended_at IS NOT NULL ORDER BY ws.ended_at DESC LIMIT 1`, []),
+    db.getFirstAsync<{ count: number }>('SELECT COUNT(*) AS count FROM workout_sessions WHERE ended_at IS NOT NULL', []),
+    db.getAllAsync<{ started_at: string; ended_at: string }>(
+      'SELECT started_at, ended_at FROM workout_sessions WHERE ended_at IS NOT NULL AND ended_at >= ?',
+      [thirtyDaysAgo.toISOString()],
+    ),
+    db.getFirstAsync<{ count: number }>('SELECT COUNT(DISTINCT exercise_id) AS count FROM session_exercises', []),
+    db.getAllAsync<{ id: string; name: string }>('SELECT id, name FROM workouts ORDER BY name COLLATE NOCASE', []),
   ]);
-
-  [active.error, last.error, count.error, recent.error, movements.error, workouts.error].forEach(throwOnError);
-  const recentRows = recent.data ?? [];
   const activeDays = new Set(recentRows.map((row) => new Date(row.started_at).toDateString()));
-  const activeRow = active.data;
-  const lastRow = last.data;
 
   return {
     activeSession: activeRow
-      ? { id: activeRow.id, startedAt: activeRow.started_at, workoutName: workoutNameFromRelation(activeRow.workouts) }
+      ? { id: activeRow.id, startedAt: activeRow.started_at, workoutName: displayName(activeRow.workout_name) }
       : null,
     lastSession:
       lastRow?.ended_at
@@ -70,14 +45,14 @@ export async function fetchDashboard(userId: string): Promise<DashboardData> {
             id: lastRow.id,
             startedAt: lastRow.started_at,
             endedAt: lastRow.ended_at,
-            workoutName: workoutNameFromRelation(lastRow.workouts),
+            workoutName: displayName(lastRow.workout_name),
           }
         : null,
-    totalSessions: count.count ?? 0,
-    weeklyWorkouts: recentRows.filter((row) => new Date(row.ended_at ?? 0) >= sevenDaysAgo).length,
+    totalSessions: count?.count ?? 0,
+    weeklyWorkouts: recentRows.filter((row) => new Date(row.ended_at) >= sevenDaysAgo).length,
     consistency: Math.round((activeDays.size / 30) * 100),
-    exercisedMovements: new Set((movements.data ?? []).map((row) => row.exercise_id)).size,
-    workouts: workouts.data ?? [],
+    exercisedMovements: movements?.count ?? 0,
+    workouts,
     activeDates: [...activeDays],
   };
 }

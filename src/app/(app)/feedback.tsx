@@ -8,7 +8,6 @@ import { colors, fonts, radius } from '@/constants/theme';
 import { formatDate } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
 import { limits } from '@/lib/validation';
-import { useAuth } from '@/providers/auth-provider';
 import { createFeedback, fetchFeedback, setFeedbackSolved } from '@/services/feedback';
 import { errorMessage } from '@/services/shared';
 
@@ -16,14 +15,13 @@ type Filter = 'open' | 'solved' | 'all';
 
 export default function FeedbackScreen() {
   const router = useRouter();
-  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [body, setBody] = useState('');
   const [filter, setFilter] = useState<Filter>('open');
   const query = useQuery({ queryKey: queryKeys.feedback(), queryFn: fetchFeedback });
   const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.feedback() });
   const create = useMutation({
-    mutationFn: () => createFeedback(user!.id, user?.email, body),
+    mutationFn: () => createFeedback(body),
     onSuccess: async () => { setBody(''); await refresh(); },
   });
   const toggle = useMutation({ mutationFn: ({ id, solved }: { id: string; solved: boolean }) => setFeedbackSolved(id, solved), onSuccess: refresh });
@@ -36,12 +34,12 @@ export default function FeedbackScreen() {
   return (
     <Screen refreshing={query.isRefetching} onRefresh={() => void query.refetch()}>
       <Button title="More" compact variant="ghost" style={styles.back} onPress={() => router.back()} left={<ArrowLeft color={colors.textMuted} size={18} />} />
-      <PageHeader title="Feedback" subtitle="Share bugs and ideas. All signed-in collaborators can track and solve notes." icon={<MessageSquareText color={colors.primary} size={21} />} />
+      <PageHeader title="Feedback" subtitle="Bugs and ideas, saved on this device. Mark them solved when done." icon={<MessageSquareText color={colors.primary} size={21} />} />
       {query.error || create.error || toggle.error ? <ErrorBanner message={errorMessage(query.error ?? create.error ?? toggle.error)} /> : null}
       <Card style={styles.cardGap}>
         <Text style={styles.title}>New note</Text>
         <Field label={`Message · ${body.length.toLocaleString()} / ${limits.feedback.toLocaleString()}`} multiline value={body} onChangeText={setBody} maxLength={limits.feedback} placeholder="Describe a bug, steps, or an improvement idea…" />
-        <Button title="Send" disabled={!body.trim()} loading={create.isPending} onPress={() => create.mutate()} left={<Send color={colors.primaryText} size={16} />} />
+        <Button title="Save note" disabled={!body.trim()} loading={create.isPending} onPress={() => create.mutate()} left={<Send color={colors.primaryText} size={16} />} />
       </Card>
       <View style={styles.filters}>
         {(['open', 'solved', 'all'] as Filter[]).map((value) => (
@@ -56,10 +54,7 @@ export default function FeedbackScreen() {
             <Card key={item.id} style={[styles.note, item.solved && styles.noteSolved]}>
               <View style={styles.noteTop}>
                 {item.solved ? <CheckCircle2 color={colors.success} size={18} /> : <Circle color={colors.warning} size={18} />}
-                <View style={styles.flex}>
-                  <Text style={styles.author}>{item.authorEmail}</Text>
-                  <Text style={styles.date}>{formatDate(item.createdAt, true)}</Text>
-                </View>
+                <Text style={[styles.date, styles.flex]}>{formatDate(item.createdAt, true)}</Text>
                 <Text style={[styles.status, { color: item.solved ? colors.success : colors.warning }]}>{item.solved ? 'SOLVED' : 'OPEN'}</Text>
               </View>
               <Text style={styles.body}>{item.body}</Text>
@@ -85,8 +80,7 @@ const styles = StyleSheet.create({
   note: { gap: 12 },
   noteSolved: { opacity: 0.72 },
   noteTop: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  author: { color: colors.text, fontFamily: fonts.sansSemibold, fontSize: 13 },
-  date: { color: colors.textMuted, fontFamily: fonts.sans, fontSize: 10, marginTop: 2 },
+  date: { color: colors.textMuted, fontFamily: fonts.sans, fontSize: 11 },
   status: { fontFamily: fonts.monoSemibold, fontSize: 8, letterSpacing: 0.8 },
   body: { color: colors.text, fontFamily: fonts.sans, fontSize: 14, lineHeight: 20 },
 });

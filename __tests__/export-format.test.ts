@@ -2,7 +2,6 @@ import { strFromU8, unzipSync } from 'fflate';
 
 jest.mock('expo-file-system', () => ({ File: jest.fn(), Paths: { cache: '' } }));
 jest.mock('expo-sharing', () => ({}));
-jest.mock('@/lib/supabase', () => ({ supabase: {} }));
 
 import { createCsv, createXlsx, type ExportRow } from '@/services/export-history';
 

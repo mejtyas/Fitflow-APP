@@ -9,7 +9,6 @@ import { colors, fonts, radius } from '@/constants/theme';
 import { formatDate, formatNumber } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
 import type { WarmupSettings } from '@/lib/warmup';
-import { useAuth } from '@/providers/auth-provider';
 import { fetchExerciseDetail, updateWarmupSettings } from '@/services/exercises';
 import { errorMessage } from '@/services/shared';
 
@@ -22,21 +21,19 @@ const metricLabels: Record<ProgressMetric, string> = {
 export default function ExerciseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const exerciseId = typeof id === 'string' ? id : '';
-  const { user } = useAuth();
-  const userId = user!.id;
   const router = useRouter();
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: queryKeys.exercise(userId, exerciseId),
-    queryFn: () => fetchExerciseDetail(userId, exerciseId),
+    queryKey: queryKeys.exercise(exerciseId),
+    queryFn: () => fetchExerciseDetail(exerciseId),
     enabled: Boolean(exerciseId),
   });
   const [metric, setMetric] = useState<ProgressMetric>('estimatedOneRm');
   const [warmup, setWarmup] = useState<WarmupSettings | null>(null);
   const effectiveWarmup = warmup ?? query.data?.warmupSettings ?? null;
   const saveWarmup = useMutation({
-    mutationFn: () => updateWarmupSettings(userId, exerciseId, effectiveWarmup!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.exercise(userId, exerciseId) }),
+    mutationFn: () => updateWarmupSettings(exerciseId, effectiveWarmup!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.exercise(exerciseId) }),
   });
   if (query.isLoading) return <LoadingScreen label="Loading exercise…" />;
   const data = query.data;

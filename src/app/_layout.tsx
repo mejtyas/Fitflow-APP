@@ -13,9 +13,11 @@ import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors } from '@/constants/theme';
-import { AuthProvider } from '@/providers/auth-provider';
+import { installWebAlert } from '@/lib/web-alert';
+import { DatabaseProvider } from '@/providers/database-provider';
 import { AppQueryProvider } from '@/providers/query-provider';
 
+installWebAlert();
 void SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
@@ -39,10 +41,10 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
       <SafeAreaProvider>
         <AppQueryProvider>
-          <AuthProvider>
-            <StatusBar style="light" />
+          <StatusBar style="light" />
+          <DatabaseProvider>
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }} />
-          </AuthProvider>
+          </DatabaseProvider>
         </AppQueryProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

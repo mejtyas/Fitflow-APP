@@ -6,15 +6,12 @@ import { Button, Card, EmptyState, ErrorBanner, LoadingScreen, PageHeader, Scree
 import { colors, fonts, radius } from '@/constants/theme';
 import { formatDurationMs } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { fetchStats } from '@/services/history';
 import { errorMessage } from '@/services/shared';
 
 export default function StatsScreen() {
   const router = useRouter();
-  const { user } = useAuth();
-  const userId = user!.id;
-  const query = useQuery({ queryKey: queryKeys.stats(userId), queryFn: () => fetchStats(userId) });
+  const query = useQuery({ queryKey: queryKeys.stats(), queryFn: () => fetchStats() });
   if (query.isLoading) return <LoadingScreen label="Loading stats…" />;
   const data = query.data;
   return (

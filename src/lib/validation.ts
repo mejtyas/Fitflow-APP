@@ -41,13 +41,3 @@ export function sanitizeDescription(raw: string | null | undefined): string | nu
   return value ? value.slice(0, limits.description) : null;
 }
 
-export function validateCredentials(email: string, password: string, registering = false) {
-  const normalizedEmail = email.trim().toLowerCase();
-  if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
-    return { error: 'Enter a valid email address.' } as const;
-  }
-  if (!password || (registering && password.length < 6)) {
-    return { error: registering ? 'Password must be at least 6 characters.' : 'Enter your password.' } as const;
-  }
-  return { email: normalizedEmail, password } as const;
-}

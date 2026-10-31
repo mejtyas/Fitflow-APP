@@ -6,22 +6,19 @@ import { Button, Card, EmptyState, ErrorBanner, LoadingScreen, PageHeader, Scree
 import { colors, fonts, radius } from '@/constants/theme';
 import { formatDate } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { errorMessage } from '@/services/shared';
 import { deleteWorkout, fetchWorkouts, startWorkout } from '@/services/workouts';
 
 export default function WorkoutsScreen() {
-  const { user } = useAuth();
-  const userId = user!.id;
   const router = useRouter();
   const queryClient = useQueryClient();
-  const query = useQuery({ queryKey: queryKeys.workouts(userId), queryFn: () => fetchWorkouts(userId) });
+  const query = useQuery({ queryKey: queryKeys.workouts(), queryFn: () => fetchWorkouts() });
   const remove = useMutation({
-    mutationFn: (id: string) => deleteWorkout(userId, id),
+    mutationFn: (id: string) => deleteWorkout(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.all }),
   });
   const start = useMutation({
-    mutationFn: (id: string) => startWorkout(userId, id),
+    mutationFn: (id: string) => startWorkout(id),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.all });
       if ('activeWorkoutMismatch' in result) Alert.alert('Workout already active', 'Resuming your current workout.');

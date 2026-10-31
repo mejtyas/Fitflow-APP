@@ -1,4 +1,4 @@
-import type { Json } from '@/lib/database.types';
+import type { Json } from '@/lib/json';
 
 export type WarmupSettings = {
   w1_pct_low: number;

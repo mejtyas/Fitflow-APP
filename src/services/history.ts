@@ -1,7 +1,7 @@
-import { supabase } from '@/lib/supabase';
-import { formatDurationMs, workoutNameFromRelation } from '@/lib/format';
+import { getDatabase, transaction } from '@/lib/db';
+import { displayName, formatDurationMs } from '@/lib/format';
 import { isLoggedSetReps } from '@/lib/validation';
-import { FitFlowError, requireData, throwOnError } from '@/services/shared';
+import { LixoError, requireRow } from '@/services/shared';
 
 export const HISTORY_PAGE_SIZE = 10;
 
@@ -22,47 +22,49 @@ export type HistoryPageData = {
   averageMinutes: number;
 };
 
-export async function fetchHistoryPage(userId: string, page: number): Promise<HistoryPageData> {
+function durationMs(startedAt: string, endedAt: string) {
+  return new Date(endedAt).getTime() - new Date(startedAt).getTime();
+}
+
+function sessionName(name: string | null) {
+  return displayName(name, 'Unnamed Session');
+}
+
+async function completedSessionTimes() {
+  const db = await getDatabase();
+  return db.getAllAsync<{ id: string; started_at: string; ended_at: string }>(
+    'SELECT id, started_at, ended_at FROM workout_sessions WHERE ended_at IS NOT NULL',
+    [],
+  );
+}
+
+export async function fetchHistoryPage(page: number): Promise<HistoryPageData> {
   const safePage = Math.max(1, Math.floor(page));
-  const from = (safePage - 1) * HISTORY_PAGE_SIZE;
-  const [pageResult, summaryResult] = await Promise.all([
-    supabase
-      .from('workout_sessions')
-      .select('id, started_at, ended_at, workouts(name)', { count: 'exact' })
-      .eq('user_id', userId)
-      .not('ended_at', 'is', null)
-      .order('started_at', { ascending: false })
-      .range(from, from + HISTORY_PAGE_SIZE - 1),
-    supabase
-      .from('workout_sessions')
-      .select('started_at, ended_at')
-      .eq('user_id', userId)
-      .not('ended_at', 'is', null),
+  const db = await getDatabase();
+  const [rows, summary] = await Promise.all([
+    db.getAllAsync<{ id: string; started_at: string; ended_at: string; workout_name: string | null }>(
+      `SELECT ws.id, ws.started_at, ws.ended_at, w.name AS workout_name
+         FROM workout_sessions ws LEFT JOIN workouts w ON w.id = ws.workout_id
+        WHERE ws.ended_at IS NOT NULL
+        ORDER BY ws.started_at DESC
+        LIMIT ? OFFSET ?`,
+      [HISTORY_PAGE_SIZE, (safePage - 1) * HISTORY_PAGE_SIZE],
+    ),
+    completedSessionTimes(),
   ]);
-  throwOnError(pageResult.error);
-  throwOnError(summaryResult.error);
-  const totalSessions = pageResult.count ?? 0;
+  const totalSessions = summary.length;
   const totalMinutes = Math.max(
     0,
-    Math.floor(
-      (summaryResult.data ?? []).reduce((sum, row) => {
-        if (!row.ended_at) return sum;
-        return sum + new Date(row.ended_at).getTime() - new Date(row.started_at).getTime();
-      }, 0) / 60_000,
-    ),
+    Math.floor(summary.reduce((sum, row) => sum + durationMs(row.started_at, row.ended_at), 0) / 60_000),
   );
   return {
-    items: (pageResult.data ?? []).flatMap((row) =>
-      row.ended_at
-        ? [{
-            id: row.id,
-            startedAt: row.started_at,
-            endedAt: row.ended_at,
-            workoutName: workoutNameFromRelation(row.workouts, 'Unnamed Session'),
-            duration: formatDurationMs(new Date(row.ended_at).getTime() - new Date(row.started_at).getTime()),
-          }]
-        : [],
-    ),
+    items: rows.map((row) => ({
+      id: row.id,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      workoutName: sessionName(row.workout_name),
+      duration: formatDurationMs(durationMs(row.started_at, row.ended_at)),
+    })),
     page: safePage,
     totalPages: Math.max(1, Math.ceil(totalSessions / HISTORY_PAGE_SIZE)),
     totalSessions,
@@ -91,46 +93,57 @@ export type HistoryDetail = {
   }[];
 };
 
-export async function fetchHistoryDetail(userId: string, sessionId: string): Promise<HistoryDetail> {
-  const [sessionResult, exercisesResult, restResult] = await Promise.all([
-    supabase
-      .from('workout_sessions')
-      .select('id, started_at, ended_at, workouts(name)')
-      .eq('id', sessionId)
-      .eq('user_id', userId)
-      .single(),
-    supabase
-      .from('session_exercises')
-      .select('id, order_index, logged_order, first_logged_at, exercises(name), session_sets(set_index, kg, reps)')
-      .eq('workout_session_id', sessionId)
-      .order('order_index'),
-    supabase
-      .from('session_rest_periods')
-      .select('id, started_at, ended_at, planned_target_ms')
-      .eq('workout_session_id', sessionId)
-      .order('started_at'),
+export async function fetchHistoryDetail(sessionId: string): Promise<HistoryDetail> {
+  const db = await getDatabase();
+  const session = requireRow(
+    await db.getFirstAsync<{ id: string; started_at: string; ended_at: string | null; workout_name: string | null }>(
+      `SELECT ws.id, ws.started_at, ws.ended_at, w.name AS workout_name
+         FROM workout_sessions ws LEFT JOIN workouts w ON w.id = ws.workout_id
+        WHERE ws.id = ?`,
+      [sessionId],
+    ),
+    'Session not found.',
+  );
+  if (!session.ended_at) throw new LixoError('Only completed sessions are shown in history.');
+  const [exerciseRows, setRows, restRows] = await Promise.all([
+    db.getAllAsync<{ id: string; name: string | null; logged_order: number | null; first_logged_at: string | null }>(
+      `SELECT se.id, e.name, se.logged_order, se.first_logged_at
+         FROM session_exercises se LEFT JOIN exercises e ON e.id = se.exercise_id
+        WHERE se.workout_session_id = ?
+        ORDER BY se.order_index`,
+      [sessionId],
+    ),
+    db.getAllAsync<{ session_exercise_id: string; set_index: number; kg: number | null; reps: number | null }>(
+      `SELECT ss.session_exercise_id, ss.set_index, ss.kg, ss.reps
+         FROM session_sets ss JOIN session_exercises se ON se.id = ss.session_exercise_id
+        WHERE se.workout_session_id = ?
+        ORDER BY ss.set_index`,
+      [sessionId],
+    ),
+    db.getAllAsync<{ id: string; started_at: string; ended_at: string | null; planned_target_ms: number }>(
+      `SELECT id, started_at, ended_at, planned_target_ms FROM session_rest_periods
+        WHERE workout_session_id = ? ORDER BY started_at`,
+      [sessionId],
+    ),
   ]);
-  const session = requireData(sessionResult.data, sessionResult.error, 'Session not found.');
-  if (!session.ended_at) throw new FitFlowError('Only completed sessions are shown in history.');
-  throwOnError(exercisesResult.error);
-  throwOnError(restResult.error);
 
   return {
     id: session.id,
-    workoutName: workoutNameFromRelation(session.workouts, 'Unnamed Session'),
+    workoutName: sessionName(session.workout_name),
     startedAt: session.started_at,
     endedAt: session.ended_at,
-    exercises: (exercisesResult.data ?? []).map((row) => ({
+    exercises: exerciseRows.map((row) => ({
       id: row.id,
-      name: workoutNameFromRelation(row.exercises, '?'),
+      name: displayName(row.name, '?'),
       loggedOrder: row.logged_order,
       firstLoggedAt: row.first_logged_at,
-      sets: [...(row.session_sets ?? [])]
-        .filter((set): set is typeof set & { reps: number } => isLoggedSetReps(set.reps))
-        .sort((a, b) => a.set_index - b.set_index)
-        .map((set) => ({ setIndex: set.set_index, kg: set.kg, reps: set.reps })),
+      sets: setRows.flatMap((set) =>
+        set.session_exercise_id === row.id && isLoggedSetReps(set.reps)
+          ? [{ setIndex: set.set_index, kg: set.kg, reps: set.reps }]
+          : [],
+      ),
     })),
-    restPeriods: (restResult.data ?? []).map((row) => ({
+    restPeriods: restRows.map((row) => ({
       id: row.id,
       startedAt: row.started_at,
       endedAt: row.ended_at,
@@ -139,49 +152,33 @@ export async function fetchHistoryDetail(userId: string, sessionId: string): Pro
   };
 }
 
-export async function updateCompletedSessionTimes(
-  userId: string,
-  sessionId: string,
-  startedAt: Date,
-  endedAt: Date,
-) {
+export async function updateCompletedSessionTimes(sessionId: string, startedAt: Date, endedAt: Date) {
   if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime())) {
-    throw new FitFlowError('Invalid date.');
+    throw new LixoError('Invalid date.');
   }
-  if (endedAt <= startedAt) throw new FitFlowError('End time must be after start time.');
-  const existing = await supabase
-    .from('workout_sessions')
-    .select('id, ended_at')
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .single();
-  const session = requireData(existing.data, existing.error, 'Session not found.');
-  if (!session.ended_at) throw new FitFlowError('Only completed sessions can be edited.');
-  const { error } = await supabase
-    .from('workout_sessions')
-    .update({ started_at: startedAt.toISOString(), ended_at: endedAt.toISOString() })
-    .eq('id', sessionId)
-    .eq('user_id', userId);
-  throwOnError(error);
+  if (endedAt <= startedAt) throw new LixoError('End time must be after start time.');
+  await transaction(async (db) => {
+    const session = requireRow(
+      await db.getFirstAsync<{ ended_at: string | null }>('SELECT ended_at FROM workout_sessions WHERE id = ?', [sessionId]),
+      'Session not found.',
+    );
+    if (!session.ended_at) throw new LixoError('Only completed sessions can be edited.');
+    await db.runAsync('UPDATE workout_sessions SET started_at = ?, ended_at = ? WHERE id = ?', [
+      startedAt.toISOString(),
+      endedAt.toISOString(),
+      sessionId,
+    ]);
+  });
 }
 
-export async function deleteHistorySession(userId: string, sessionId: string) {
-  const { error } = await supabase
-    .from('workout_sessions')
-    .delete()
-    .eq('id', sessionId)
-    .eq('user_id', userId)
-    .not('ended_at', 'is', null);
-  throwOnError(error);
+export async function deleteHistorySession(sessionId: string) {
+  await transaction((db) =>
+    db.runAsync('DELETE FROM workout_sessions WHERE id = ? AND ended_at IS NOT NULL', [sessionId]),
+  );
 }
 
-export async function clearCompletedHistory(userId: string) {
-  const { error } = await supabase
-    .from('workout_sessions')
-    .delete()
-    .eq('user_id', userId)
-    .not('ended_at', 'is', null);
-  throwOnError(error);
+export async function clearCompletedHistory() {
+  await transaction((db) => db.runAsync('DELETE FROM workout_sessions WHERE ended_at IS NOT NULL', []));
 }
 
 export type StatsData = {
@@ -190,48 +187,35 @@ export type StatsData = {
   topExercises: { id: string; name: string; count: number }[];
 };
 
-export async function fetchStats(userId: string): Promise<StatsData> {
-  const sessionsResult = await supabase
-    .from('workout_sessions')
-    .select('id, started_at, ended_at')
-    .eq('user_id', userId)
-    .not('ended_at', 'is', null);
-  throwOnError(sessionsResult.error);
-  const sessions = sessionsResult.data ?? [];
-  const totalMinutes = Math.round(
-    sessions.reduce(
-      (sum, row) =>
-        sum + (row.ended_at ? new Date(row.ended_at).getTime() - new Date(row.started_at).getTime() : 0),
-      0,
-    ) / 60_000,
-  );
-  if (sessions.length === 0) return { totalWorkouts: 0, totalMinutes, topExercises: [] };
-  const exerciseResult = await supabase
-    .from('session_exercises')
-    .select('exercise_id, exercises(name)')
-    .in('workout_session_id', sessions.map((row) => row.id));
-  throwOnError(exerciseResult.error);
-  const counts = new Map<string, { id: string; name: string; count: number }>();
-  for (const row of exerciseResult.data ?? []) {
-    const current = counts.get(row.exercise_id);
-    counts.set(row.exercise_id, {
-      id: row.exercise_id,
-      name: workoutNameFromRelation(row.exercises, '?'),
-      count: (current?.count ?? 0) + 1,
-    });
-  }
+export async function fetchStats(): Promise<StatsData> {
+  const db = await getDatabase();
+  const [sessions, topExercises] = await Promise.all([
+    completedSessionTimes(),
+    db.getAllAsync<{ id: string; name: string | null; count: number }>(
+      `SELECT se.exercise_id AS id, e.name, COUNT(*) AS count
+         FROM session_exercises se
+         JOIN workout_sessions ws ON ws.id = se.workout_session_id
+         LEFT JOIN exercises e ON e.id = se.exercise_id
+        WHERE ws.ended_at IS NOT NULL
+        GROUP BY se.exercise_id
+        ORDER BY count DESC, e.name COLLATE NOCASE
+        LIMIT 5`,
+      [],
+    ),
+  ]);
   return {
     totalWorkouts: sessions.length,
-    totalMinutes,
-    topExercises: [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 5),
+    totalMinutes: Math.round(
+      sessions.reduce((sum, row) => sum + durationMs(row.started_at, row.ended_at), 0) / 60_000,
+    ),
+    topExercises: topExercises.map((row) => ({ id: row.id, name: displayName(row.name, '?'), count: row.count })),
   };
 }
 
-export async function deleteAllUserData(userId: string) {
-  const sessions = await supabase.from('workout_sessions').delete().eq('user_id', userId);
-  throwOnError(sessions.error);
-  const workouts = await supabase.from('workouts').delete().eq('user_id', userId);
-  throwOnError(workouts.error);
-  const exercises = await supabase.from('exercises').delete().eq('user_id', userId);
-  throwOnError(exercises.error);
+export async function deleteAllUserData() {
+  await transaction(async (db) => {
+    await db.runAsync('DELETE FROM workout_sessions', []);
+    await db.runAsync('DELETE FROM workouts', []);
+    await db.runAsync('DELETE FROM exercises', []);
+  });
 }

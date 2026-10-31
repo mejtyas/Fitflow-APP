@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Mail, Save, Settings, ShieldAlert, Timer, Trash2, User } from 'lucide-react-native';
+import { ArrowLeft, Database, Save, Settings, ShieldAlert, Smartphone, Timer, Trash2 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, ErrorBanner, Field, PageHeader, Screen } from '@/components/ui';
@@ -8,14 +8,12 @@ import { colors, fonts, radius } from '@/constants/theme';
 import { formatRestMs } from '@/lib/format';
 import { getDefaultRestSeconds, REST_PRESET_SECONDS, saveDefaultRestSeconds } from '@/lib/preferences';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { deleteAllUserData } from '@/services/history';
 import { errorMessage } from '@/services/shared';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const [seconds, setSeconds] = useState(150);
   const [draft, setDraft] = useState('150');
   const [saved, setSaved] = useState(false);
@@ -23,7 +21,7 @@ export default function SettingsScreen() {
     void getDefaultRestSeconds().then((value) => { setSeconds(value); setDraft(String(value)); });
   }, []);
   const remove = useMutation({
-    mutationFn: () => deleteAllUserData(user!.id),
+    mutationFn: () => deleteAllUserData(),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.all });
       Alert.alert('Data deleted', 'Your workout logs, routines and exercises were deleted.');
@@ -40,7 +38,7 @@ export default function SettingsScreen() {
   };
   const confirmDelete = () => Alert.alert(
     'Delete all workout data?',
-    'This permanently deletes all logs, routines, exercises and related data. Your account remains active.',
+    'This permanently deletes all logs, routines, exercises and related data from this device.',
     [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -57,15 +55,15 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <Button title="More" compact variant="ghost" style={styles.back} onPress={() => router.back()} left={<ArrowLeft color={colors.textMuted} size={18} />} />
-      <PageHeader title="Settings" subtitle="Account preferences and workout data." icon={<Settings color={colors.primary} size={21} />} />
+      <PageHeader title="Settings" subtitle="Preferences and workout data." icon={<Settings color={colors.primary} size={21} />} />
       {remove.error ? <ErrorBanner message={errorMessage(remove.error)} /> : null}
       <Card style={styles.cardGap}>
-        <View style={styles.heading}><User color={colors.primary} size={19} /><Text style={styles.title}>Profile</Text></View>
+        <View style={styles.heading}><Database color={colors.primary} size={19} /><Text style={styles.title}>Storage</Text></View>
         <View style={styles.profileRow}>
-          <View style={styles.profileIcon}><Mail color={colors.primary} size={21} /></View>
+          <View style={styles.profileIcon}><Smartphone color={colors.primary} size={21} /></View>
           <View style={styles.flex}>
-            <Text style={styles.label}>EMAIL ADDRESS</Text>
-            <Text style={styles.email}>{user?.email}</Text>
+            <Text style={styles.label}>LOCAL DATABASE</Text>
+            <Text style={styles.email}>Saved on this device. Export history from the History tab to keep a backup.</Text>
           </View>
         </View>
       </Card>
@@ -84,7 +82,7 @@ export default function SettingsScreen() {
       </Card>
       <Card style={styles.dangerCard}>
         <View style={styles.heading}><ShieldAlert color={colors.destructive} size={20} /><Text style={[styles.title, { color: colors.destructive }]}>Data management</Text></View>
-        <Text style={styles.body}>Delete all sessions, routines and exercises linked to this account. This action is irreversible.</Text>
+        <Text style={styles.body}>Delete all sessions, routines and exercises stored on this device. This action is irreversible.</Text>
         <Button title="Delete all data" variant="destructive" loading={remove.isPending} onPress={confirmDelete} left={<Trash2 color={colors.white} size={17} />} />
       </Card>
     </Screen>

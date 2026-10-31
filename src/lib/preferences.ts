@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const PREFERENCES_KEY = 'fitflow:preferences:v1';
+const PREFERENCES_KEY = 'lixo:preferences:v1';
 export const REST_DEFAULT_SECONDS = 150;
 export const REST_PRESET_SECONDS = [60, 90, 120, 150, 180, 300] as const;
 

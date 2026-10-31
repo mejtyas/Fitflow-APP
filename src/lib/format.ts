@@ -1,8 +1,5 @@
-export function workoutNameFromRelation(value: unknown, fallback = 'Workout'): string {
-  const row = Array.isArray(value) ? value[0] : value;
-  if (!row || typeof row !== 'object' || !('name' in row)) return fallback;
-  const name = (row as { name?: unknown }).name;
-  return typeof name === 'string' && name.trim() ? name.trim() : fallback;
+export function displayName(value: string | null | undefined, fallback = 'Workout'): string {
+  return value?.trim() || fallback;
 }
 
 export function formatDurationMs(ms: number, includeSeconds = false): string {

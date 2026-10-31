@@ -7,7 +7,6 @@ import { Button, Card, ErrorBanner, LoadingScreen, PageHeader, Screen, StatTile 
 import { colors, fonts, radius } from '@/constants/theme';
 import { formatDate } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { fetchDashboard } from '@/services/dashboard';
 import { errorMessage } from '@/services/shared';
 import { startWorkout } from '@/services/workouts';
@@ -15,12 +14,10 @@ import { startWorkout } from '@/services/workouts';
 export default function DashboardScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
-  const userId = user!.id;
   const [selectedWorkoutId, setSelectedWorkoutId] = useState<string | null>(null);
-  const query = useQuery({ queryKey: queryKeys.dashboard(userId), queryFn: () => fetchDashboard(userId) });
+  const query = useQuery({ queryKey: queryKeys.dashboard(), queryFn: () => fetchDashboard() });
   const start = useMutation({
-    mutationFn: (workoutId: string) => startWorkout(userId, workoutId),
+    mutationFn: (workoutId: string) => startWorkout(workoutId),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.all });
       if ('activeWorkoutMismatch' in result) {
@@ -47,7 +44,6 @@ export default function DashboardScreen() {
     );
   }
 
-  const displayName = user?.email?.split('@')[0] ?? 'athlete';
   const activeDateSet = new Set(data.activeDates);
   const week = Array.from({ length: 7 }, (_, index) => {
     const date = new Date();
@@ -61,7 +57,7 @@ export default function DashboardScreen() {
   return (
     <Screen refreshing={query.isRefetching} onRefresh={() => void query.refetch()} safeBottom={false}>
       <PageHeader
-        title={`${greeting}, ${displayName}`}
+        title={greeting}
         subtitle="Ready for the next session?"
         icon={<Flame color={colors.primary} size={21} />}
       />

@@ -1,10 +1,10 @@
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { strToU8, zipSync } from 'fflate';
-import { supabase } from '@/lib/supabase';
+import { getDatabase } from '@/lib/db';
+import { displayName } from '@/lib/format';
 import { isLoggedSetReps } from '@/lib/validation';
-import { workoutNameFromRelation } from '@/lib/format';
-import { FitFlowError, throwOnError } from '@/services/shared';
+import { LixoError } from '@/services/shared';
 
 export type ExportRow = {
   date: string;
@@ -30,35 +30,44 @@ const headers: (keyof ExportRow)[] = [
   'reps',
 ];
 
-async function loadRows(userId: string): Promise<ExportRow[]> {
-  const { data, error } = await supabase
-    .from('workout_sessions')
-    .select(`id, started_at, ended_at, workouts(name), session_exercises(order_index, logged_order, first_logged_at, exercises(name), session_sets(set_index, kg, reps))`)
-    .eq('user_id', userId)
-    .not('ended_at', 'is', null)
-    .order('started_at', { ascending: false });
-  throwOnError(error);
-  return (data ?? []).flatMap((session) => {
-    const endedAt = session.ended_at ? new Date(session.ended_at).getTime() : new Date(session.started_at).getTime();
-    const duration = Number(((endedAt - new Date(session.started_at).getTime()) / 60_000).toFixed(1));
-    return [...(session.session_exercises ?? [])]
-      .sort((a, b) => a.order_index - b.order_index)
-      .flatMap((exercise) =>
-        [...(exercise.session_sets ?? [])]
-          .filter((set) => isLoggedSetReps(set.reps))
-          .sort((a, b) => a.set_index - b.set_index)
-          .map((set) => ({
-            date: new Date(session.started_at).toLocaleDateString(),
-            workout_name: workoutNameFromRelation(session.workouts, 'Unnamed Session'),
-            duration_minutes: duration,
-            exercise_name: workoutNameFromRelation(exercise.exercises, '?'),
-            exercise_logged_order: exercise.logged_order ?? '',
-            exercise_first_logged_at: exercise.first_logged_at ?? '',
-            set_index: set.set_index + 1,
-            kg: set.kg ?? '',
-            reps: set.reps ?? '',
-          })),
-      );
+async function loadRows(): Promise<ExportRow[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    started_at: string;
+    ended_at: string;
+    workout_name: string | null;
+    exercise_name: string | null;
+    logged_order: number | null;
+    first_logged_at: string | null;
+    set_index: number;
+    kg: number | null;
+    reps: number | null;
+  }>(
+    `SELECT ws.started_at, ws.ended_at, w.name AS workout_name, e.name AS exercise_name,
+            se.logged_order, se.first_logged_at, ss.set_index, ss.kg, ss.reps
+       FROM workout_sessions ws
+       LEFT JOIN workouts w ON w.id = ws.workout_id
+       JOIN session_exercises se ON se.workout_session_id = ws.id
+       LEFT JOIN exercises e ON e.id = se.exercise_id
+       JOIN session_sets ss ON ss.session_exercise_id = se.id
+      WHERE ws.ended_at IS NOT NULL
+      ORDER BY ws.started_at DESC, ws.id, se.order_index, ss.set_index`,
+    [],
+  );
+  return rows.flatMap((row) => {
+    if (!isLoggedSetReps(row.reps)) return [];
+    const startedAt = new Date(row.started_at).getTime();
+    return [{
+      date: new Date(row.started_at).toLocaleDateString(),
+      workout_name: displayName(row.workout_name, 'Unnamed Session'),
+      duration_minutes: Number(((new Date(row.ended_at).getTime() - startedAt) / 60_000).toFixed(1)),
+      exercise_name: displayName(row.exercise_name, '?'),
+      exercise_logged_order: row.logged_order ?? '',
+      exercise_first_logged_at: row.first_logged_at ?? '',
+      set_index: row.set_index + 1,
+      kg: row.kg ?? '',
+      reps: row.reps,
+    }];
   });
 }
 
@@ -108,24 +117,24 @@ export function createXlsx(rows: ExportRow[]) {
   const files = {
     '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`),
     '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
-    'xl/workbook.xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="FitFlow history" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+    'xl/workbook.xml': strToU8(`<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Lixo history" sheetId="1" r:id="rId1"/></sheets></workbook>`),
     'xl/_rels/workbook.xml.rels': strToU8(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`),
     'xl/worksheets/sheet1.xml': strToU8(worksheet),
   };
   return zipSync(files, { level: 6 });
 }
 
-export async function exportHistory(userId: string, format: 'csv' | 'xlsx') {
-  if (!(await Sharing.isAvailableAsync())) throw new FitFlowError('File sharing is not available on this device.');
-  const rows = await loadRows(userId);
-  const name = `fitflow-history.${format}`;
+export async function exportHistory(format: 'csv' | 'xlsx') {
+  if (!(await Sharing.isAvailableAsync())) throw new LixoError('File sharing is not available on this device.');
+  const rows = await loadRows();
+  const name = `lixo-history.${format}`;
   const file = new File(Paths.cache, name);
   file.create({ overwrite: true, intermediates: true });
   if (format === 'csv') file.write(createCsv(rows));
   else file.write(createXlsx(rows));
   await Sharing.shareAsync(file.uri, {
     mimeType: format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    dialogTitle: `Export FitFlow history as ${format.toUpperCase()}`,
+    dialogTitle: `Export Lixo history as ${format.toUpperCase()}`,
     UTI: format === 'csv' ? 'public.comma-separated-values-text' : 'org.openxmlformats.spreadsheetml.sheet',
   });
 }

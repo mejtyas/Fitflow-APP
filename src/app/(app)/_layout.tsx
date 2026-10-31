@@ -1,12 +1,7 @@
-import { Redirect, Stack } from 'expo-router';
-import { LoadingScreen } from '@/components/ui';
+import { Stack } from 'expo-router';
 import { colors } from '@/constants/theme';
-import { useAuth } from '@/providers/auth-provider';
 
 export default function AppLayout() {
-  const { session, loading } = useAuth();
-  if (loading) return <LoadingScreen />;
-  if (!session) return <Redirect href="/(auth)/sign-in" />;
   return (
     <Stack
       screenOptions={{

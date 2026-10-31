@@ -8,7 +8,6 @@ import { Button, Card, ErrorBanner, LoadingScreen, PageHeader, Screen } from '@/
 import { colors, fonts, radius } from '@/constants/theme';
 import { formatDate, formatDurationMs } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { fetchHistoryDetail, updateCompletedSessionTimes } from '@/services/history';
 import { errorMessage } from '@/services/shared';
 
@@ -17,13 +16,11 @@ type PickerTarget = 'start' | 'end';
 export default function HistoryDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const sessionId = typeof id === 'string' ? id : '';
-  const { user } = useAuth();
-  const userId = user!.id;
   const router = useRouter();
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: queryKeys.historyDetail(userId, sessionId),
-    queryFn: () => fetchHistoryDetail(userId, sessionId),
+    queryKey: queryKeys.historyDetail(sessionId),
+    queryFn: () => fetchHistoryDetail(sessionId),
     enabled: Boolean(sessionId),
   });
   const [editing, setEditing] = useState(false);
@@ -33,7 +30,7 @@ export default function HistoryDetailScreen() {
   const effectiveEndedAt = endedAt ?? (query.data ? new Date(query.data.endedAt) : null);
   const [picker, setPicker] = useState<{ target: PickerTarget; mode: 'date' | 'time' } | null>(null);
   const save = useMutation({
-    mutationFn: () => updateCompletedSessionTimes(userId, sessionId, effectiveStartedAt!, effectiveEndedAt!),
+    mutationFn: () => updateCompletedSessionTimes(sessionId, effectiveStartedAt!, effectiveEndedAt!),
     onSuccess: async () => {
       setEditing(false);
       await queryClient.invalidateQueries({ queryKey: queryKeys.all });

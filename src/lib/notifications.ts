@@ -38,7 +38,7 @@ export async function scheduleRestCompleteNotification(seconds: number) {
       title: 'Rest complete',
       body: 'Time for your next set.',
       sound: 'default',
-      data: { kind: 'fitflow-rest-complete' },
+      data: { kind: 'lixo-rest-complete' },
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,

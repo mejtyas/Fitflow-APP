@@ -1,4 +1,4 @@
-import { formatDaysSince, formatDurationMs, formatRestMs, workoutNameFromRelation } from '@/lib/format';
+import { formatDaysSince, formatDurationMs, formatRestMs, displayName } from '@/lib/format';
 import { estimatedOneRmEpley, sessionMetrics, setVolume } from '@/lib/metrics';
 
 describe('metrics', () => {
@@ -29,10 +29,10 @@ describe('formatting', () => {
     expect(formatRestMs(90_000)).toBe('1:30');
   });
 
-  test('reads Supabase to-one and array relation forms', () => {
-    expect(workoutNameFromRelation({ name: 'Push' })).toBe('Push');
-    expect(workoutNameFromRelation([{ name: 'Pull' }])).toBe('Pull');
-    expect(workoutNameFromRelation(null, 'Fallback')).toBe('Fallback');
+  test('falls back for blank display names', () => {
+    expect(displayName(' Push ')).toBe('Push');
+    expect(displayName('   ')).toBe('Workout');
+    expect(displayName(null, 'Fallback')).toBe('Fallback');
   });
 
   test('formats local calendar distance without DST assumptions', () => {

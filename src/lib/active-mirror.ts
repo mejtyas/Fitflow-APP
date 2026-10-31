@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RestTimerState } from '@/services/active-workout';
 
-const PREFIX = 'fitflow:activeSession:v4:';
+const PREFIX = 'lixo:activeSession:v4:';
 
 export type MirrorSet = {
   kg: number | null;

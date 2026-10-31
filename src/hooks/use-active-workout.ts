@@ -33,7 +33,7 @@ function mergeMirror(exercises: ActiveExercise[], sets: Record<string, MirrorSet
   }));
 }
 
-export function useActiveWorkout(data: ActiveWorkoutData, userId: string) {
+export function useActiveWorkout(data: ActiveWorkoutData) {
   const [exercises, setExercises] = useState(data.exercises);
   const [rest, setRest] = useState<RestTimerState>(data.rest);
   const [restDurations, setRestDurations] = useState<Record<string, number>>({});
@@ -153,7 +153,7 @@ export function useActiveWorkout(data: ActiveWorkoutData, userId: string) {
       restBusyRef.current = true;
       try {
         const previous = restRef.current;
-        const next = await applyRestTimerOperation(userId, data.sessionId, operation);
+        const next = await applyRestTimerOperation(data.sessionId, operation);
         setRest(next);
         restRef.current = next;
         if (operation.kind !== 'pull') alarmConsumedRef.current = false;
@@ -178,7 +178,7 @@ export function useActiveWorkout(data: ActiveWorkoutData, userId: string) {
         restBusyRef.current = false;
       }
     },
-    [data.sessionId, persistMirror, userId],
+    [data.sessionId, persistMirror],
   );
 
   useEffect(() => {
@@ -369,7 +369,7 @@ export function useActiveWorkout(data: ActiveWorkoutData, userId: string) {
         throw new Error('Some sets could not be synced. Check your connection and try finishing again.');
       }
       await cancelRestNotification(restNotificationRef.current);
-      await endActiveWorkout(userId, data.sessionId);
+      await endActiveWorkout(data.sessionId);
       finishedRef.current = true;
       if (mirrorWriteRef.current) clearTimeout(mirrorWriteRef.current);
       mirrorWriteRef.current = null;
@@ -382,7 +382,7 @@ export function useActiveWorkout(data: ActiveWorkoutData, userId: string) {
     } finally {
       setEnding(false);
     }
-  }, [data.sessionId, flushAll, userId]);
+  }, [data.sessionId, flushAll]);
 
   const summary = useMemo(() => {
     const allSets = exercises.flatMap((exercise) => exercise.sets);

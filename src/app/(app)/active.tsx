@@ -32,7 +32,6 @@ import { REST_PRESET_SECONDS } from '@/lib/preferences';
 import { queryKeys } from '@/lib/query-keys';
 import { computeWarmupPair, topSetKgFromPastSessions } from '@/lib/warmup';
 import { useActiveWorkout } from '@/hooks/use-active-workout';
-import { useAuth } from '@/providers/auth-provider';
 import {
   addExerciseToActiveSession,
   fetchActiveWorkout,
@@ -45,16 +44,14 @@ import { errorMessage } from '@/services/shared';
 
 export default function ActiveWorkoutScreen() {
   const { session } = useLocalSearchParams<{ session?: string }>();
-  const { user } = useAuth();
-  const userId = user!.id;
   const query = useQuery({
-    queryKey: queryKeys.active(userId, session ?? null),
-    queryFn: () => fetchActiveWorkout(userId, session ?? null),
+    queryKey: queryKeys.active(session ?? null),
+    queryFn: () => fetchActiveWorkout(session ?? null),
     staleTime: Infinity,
   });
   if (query.isLoading) return <LoadingScreen label="Opening active workout…" />;
   if (!query.data) return <NoActiveWorkout error={query.error} />;
-  return <ActiveWorkoutContent data={query.data} userId={userId} refetch={() => query.refetch()} />;
+  return <ActiveWorkoutContent data={query.data} refetch={() => query.refetch()} />;
 }
 
 function NoActiveWorkout({ error }: { error: unknown }) {
@@ -69,17 +66,15 @@ function NoActiveWorkout({ error }: { error: unknown }) {
 
 function ActiveWorkoutContent({
   data,
-  userId,
   refetch,
 }: {
   data: ActiveWorkoutData;
-  userId: string;
   refetch: () => Promise<{ data?: ActiveWorkoutData | null }>;
 }) {
-  useKeepAwake('fitflow-active-workout');
+  useKeepAwake('lixo-active-workout');
   const router = useRouter();
   const queryClient = useQueryClient();
-  const workout = useActiveWorkout(data, userId);
+  const workout = useActiveWorkout(data);
   const [selectedId, setSelectedId] = useState(data.exercises[0]?.id ?? null);
   const [exercisePicker, setExercisePicker] = useState(false);
   const [restPicker, setRestPicker] = useState(false);
@@ -120,7 +115,7 @@ function ActiveWorkoutContent({
     },
   });
   const noteMutation = useMutation({
-    mutationFn: () => updateExerciseDescription(userId, current!.exerciseId, noteDraft ?? ''),
+    mutationFn: () => updateExerciseDescription(current!.exerciseId, noteDraft ?? ''),
     onSuccess: async () => {
       setNoteDraft(null);
       const refreshed = await refetch();

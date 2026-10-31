@@ -1,10 +1,10 @@
-import type { Json } from '@/lib/database.types';
+import { createId, getDatabase, nowIso, transaction } from '@/lib/db';
+import { displayName } from '@/lib/format';
+import { parseJson } from '@/lib/json';
 import { estimatedOneRmEpley, sessionMetrics } from '@/lib/metrics';
-import { supabase } from '@/lib/supabase';
 import { isLoggedSetReps, sanitizeDescription, sanitizeName } from '@/lib/validation';
 import { parseWarmupSettings, warmupSettingsToJson, type WarmupSettings } from '@/lib/warmup';
-import { FitFlowError, requireData, throwOnError } from '@/services/shared';
-import { workoutNameFromRelation } from '@/lib/format';
+import { LixoError, requireRow } from '@/services/shared';
 
 export type ExerciseListItem = {
   id: string;
@@ -13,60 +13,64 @@ export type ExerciseListItem = {
   createdAt: string;
 };
 
-export async function fetchExercises(userId: string): Promise<ExerciseListItem[]> {
-  const { data, error } = await supabase
-    .from('exercises')
-    .select('id, name, description, created_at')
-    .eq('user_id', userId)
-    .order('name');
-  throwOnError(error);
-  return (data ?? []).map((row) => ({ ...row, createdAt: row.created_at }));
+export async function fetchExercises(): Promise<ExerciseListItem[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<ExerciseListItem>(
+    'SELECT id, name, description, created_at AS createdAt FROM exercises ORDER BY name COLLATE NOCASE',
+    [],
+  );
 }
 
-export async function createExercise(userId: string, nameRaw: string, descriptionRaw: string) {
+export async function createExercise(nameRaw: string, descriptionRaw: string) {
   const name = sanitizeName(nameRaw);
-  if (!name) throw new FitFlowError('Exercise name is required.');
-  const { error } = await supabase.from('exercises').insert({
-    user_id: userId,
-    name,
-    description: sanitizeDescription(descriptionRaw),
-  });
-  throwOnError(error);
+  if (!name) throw new LixoError('Exercise name is required.');
+  await transaction((db) =>
+    db.runAsync(
+      'INSERT INTO exercises (id, name, description, warmup_settings, created_at) VALUES (?, ?, ?, NULL, ?)',
+      [createId(), name, sanitizeDescription(descriptionRaw), nowIso()],
+    ),
+  );
 }
 
-export async function updateExercise(userId: string, id: string, nameRaw: string, descriptionRaw: string) {
+export async function updateExercise(id: string, nameRaw: string, descriptionRaw: string) {
   const name = sanitizeName(nameRaw);
-  if (!name) throw new FitFlowError('Exercise name is required.');
-  const { error } = await supabase
-    .from('exercises')
-    .update({ name, description: sanitizeDescription(descriptionRaw) })
-    .eq('id', id)
-    .eq('user_id', userId);
-  throwOnError(error);
+  if (!name) throw new LixoError('Exercise name is required.');
+  await transaction((db) =>
+    db.runAsync('UPDATE exercises SET name = ?, description = ? WHERE id = ?', [
+      name,
+      sanitizeDescription(descriptionRaw),
+      id,
+    ]),
+  );
 }
 
-export async function updateExerciseDescription(userId: string, id: string, descriptionRaw: string) {
-  const { error } = await supabase
-    .from('exercises')
-    .update({ description: sanitizeDescription(descriptionRaw) })
-    .eq('id', id)
-    .eq('user_id', userId);
-  throwOnError(error);
+export async function updateExerciseDescription(id: string, descriptionRaw: string) {
+  await transaction((db) =>
+    db.runAsync('UPDATE exercises SET description = ? WHERE id = ?', [sanitizeDescription(descriptionRaw), id]),
+  );
 }
 
-export async function updateWarmupSettings(userId: string, id: string, settings: WarmupSettings) {
+export async function updateWarmupSettings(id: string, settings: WarmupSettings) {
   const normalized = parseWarmupSettings(warmupSettingsToJson(settings));
-  const { error } = await supabase
-    .from('exercises')
-    .update({ warmup_settings: warmupSettingsToJson(normalized) })
-    .eq('id', id)
-    .eq('user_id', userId);
-  throwOnError(error);
+  await transaction((db) =>
+    db.runAsync('UPDATE exercises SET warmup_settings = ? WHERE id = ?', [
+      JSON.stringify(warmupSettingsToJson(normalized)),
+      id,
+    ]),
+  );
 }
 
-export async function deleteExercise(userId: string, id: string) {
-  const { error } = await supabase.from('exercises').delete().eq('id', id).eq('user_id', userId);
-  throwOnError(error);
+export async function deleteExercise(id: string) {
+  await transaction(async (db) => {
+    const used = await db.getFirstAsync<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM session_exercises WHERE exercise_id = ?',
+      [id],
+    );
+    if ((used?.count ?? 0) > 0) {
+      throw new LixoError('This exercise is part of your workout history, so it cannot be deleted.');
+    }
+    await db.runAsync('DELETE FROM exercises WHERE id = ?', [id]);
+  });
 }
 
 export type ExerciseProgressPoint = {
@@ -97,34 +101,50 @@ export type ExerciseDetail = {
   }[];
 };
 
-export async function fetchExerciseDetail(userId: string, id: string): Promise<ExerciseDetail> {
-  const [exerciseResult, historyResult] = await Promise.all([
-    supabase.from('exercises').select('*').eq('id', id).eq('user_id', userId).single(),
-    supabase
-      .from('session_exercises')
-      .select(`id, workout_session_id, workout_sessions!inner(id, started_at, ended_at, user_id, workouts(name)), session_sets(id, set_index, kg, reps)`)
-      .eq('exercise_id', id)
-      .eq('workout_sessions.user_id', userId)
-      .not('workout_sessions.ended_at', 'is', null)
-      .order('workout_sessions(started_at)', { ascending: false }),
-  ]);
-  const exercise = requireData(exerciseResult.data, exerciseResult.error, 'Exercise not found.');
-  throwOnError(historyResult.error);
+export async function fetchExerciseDetail(id: string): Promise<ExerciseDetail> {
+  const db = await getDatabase();
+  const exercise = requireRow(
+    await db.getFirstAsync<{ id: string; name: string; description: string | null; warmup_settings: string | null }>(
+      'SELECT id, name, description, warmup_settings FROM exercises WHERE id = ?',
+      [id],
+    ),
+    'Exercise not found.',
+  );
+  const setRows = await db.getAllAsync<{
+    session_id: string;
+    started_at: string;
+    workout_name: string | null;
+    set_index: number | null;
+    kg: number | null;
+    reps: number | null;
+  }>(
+    `SELECT ws.id AS session_id, ws.started_at, w.name AS workout_name, ss.set_index, ss.kg, ss.reps
+       FROM session_exercises se
+       JOIN workout_sessions ws ON ws.id = se.workout_session_id
+       LEFT JOIN workouts w ON w.id = ws.workout_id
+       LEFT JOIN session_sets ss ON ss.session_exercise_id = se.id
+      WHERE se.exercise_id = ? AND ws.ended_at IS NOT NULL
+      ORDER BY ws.started_at DESC, se.order_index, ss.set_index`,
+    [id],
+  );
 
-  const recentSessions = (historyResult.data ?? []).map((row) => {
-    const sessionRelation = row.workout_sessions;
-    const session = Array.isArray(sessionRelation) ? sessionRelation[0] : sessionRelation;
-    const sets = [...(row.session_sets ?? [])]
-      .filter((set) => isLoggedSetReps(set.reps))
-      .sort((a, b) => a.set_index - b.set_index)
-      .map((set) => ({ kg: set.kg, reps: set.reps, setIndex: set.set_index }));
-    return {
-      sessionId: session?.id ?? row.workout_session_id,
-      startedAt: session?.started_at ?? '',
-      workoutName: workoutNameFromRelation(session?.workouts),
-      sets,
-    };
-  });
+  const sessionsById = new Map<string, ExerciseDetail['recentSessions'][number]>();
+  for (const row of setRows) {
+    let session = sessionsById.get(row.session_id);
+    if (!session) {
+      session = {
+        sessionId: row.session_id,
+        startedAt: row.started_at,
+        workoutName: displayName(row.workout_name),
+        sets: [],
+      };
+      sessionsById.set(row.session_id, session);
+    }
+    if (row.set_index !== null && isLoggedSetReps(row.reps)) {
+      session.sets.push({ kg: row.kg, reps: row.reps, setIndex: row.set_index });
+    }
+  }
+  const recentSessions = [...sessionsById.values()];
 
   const progress = recentSessions
     .map((session) => ({
@@ -140,7 +160,7 @@ export async function fetchExerciseDetail(userId: string, id: string): Promise<E
     id: exercise.id,
     name: exercise.name,
     description: exercise.description,
-    warmupSettings: parseWarmupSettings(exercise.warmup_settings as Json | null),
+    warmupSettings: parseWarmupSettings(parseJson(exercise.warmup_settings)),
     sessionCount: recentSessions.length,
     totalSets: allSets.length,
     maxWeight: Math.max(0, ...allSets.map((set) => set.kg ?? 0)),

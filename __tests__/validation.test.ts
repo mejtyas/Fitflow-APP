@@ -5,11 +5,10 @@ import {
   isValidUuid,
   sanitizeDescription,
   sanitizeName,
-  validateCredentials,
 } from '@/lib/validation';
 
 describe('validation', () => {
-  test('accepts Supabase UUIDs and rejects malformed ids', () => {
+  test('accepts v4 UUIDs and rejects malformed ids', () => {
     expect(isValidUuid('550e8400-e29b-41d4-a716-446655440000')).toBe(true);
     expect(isValidUuid('not-an-id')).toBe(false);
   });
@@ -41,15 +40,4 @@ describe('validation', () => {
     expect(sanitizeDescription('')).toBeNull();
   });
 
-  test('normalizes valid credentials', () => {
-    expect(validateCredentials(' USER@Example.com ', 'secret')).toEqual({
-      email: 'user@example.com',
-      password: 'secret',
-    });
-  });
-
-  test('rejects invalid email and short registration password', () => {
-    expect(validateCredentials('wrong', 'secret')).toHaveProperty('error');
-    expect(validateCredentials('a@b.com', '123', true)).toHaveProperty('error');
-  });
 });

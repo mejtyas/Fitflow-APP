@@ -7,22 +7,19 @@ import { Button, Card, EmptyState, ErrorBanner, LoadingScreen, PageHeader, Scree
 import { colors, fonts, radius } from '@/constants/theme';
 import { formatDate, formatDurationMs } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { exportHistory } from '@/services/export-history';
 import { clearCompletedHistory, deleteHistorySession, fetchHistoryPage } from '@/services/history';
 import { errorMessage } from '@/services/shared';
 
 export default function HistoryScreen() {
-  const { user } = useAuth();
-  const userId = user!.id;
   const router = useRouter();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const query = useQuery({ queryKey: queryKeys.history(userId, page), queryFn: () => fetchHistoryPage(userId, page) });
+  const query = useQuery({ queryKey: queryKeys.history(page), queryFn: () => fetchHistoryPage(page) });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.all });
-  const remove = useMutation({ mutationFn: (id: string) => deleteHistorySession(userId, id), onSuccess: invalidate });
-  const clear = useMutation({ mutationFn: () => clearCompletedHistory(userId), onSuccess: async () => { setPage(1); await invalidate(); } });
-  const share = useMutation({ mutationFn: (format: 'csv' | 'xlsx') => exportHistory(userId, format) });
+  const remove = useMutation({ mutationFn: (id: string) => deleteHistorySession(id), onSuccess: invalidate });
+  const clear = useMutation({ mutationFn: () => clearCompletedHistory(), onSuccess: async () => { setPage(1); await invalidate(); } });
+  const share = useMutation({ mutationFn: (format: 'csv' | 'xlsx') => exportHistory(format) });
 
   const confirmClear = () => Alert.alert('Clear completed history?', 'All completed sessions and their sets will be permanently deleted.', [
     { text: 'Cancel', style: 'cancel' },

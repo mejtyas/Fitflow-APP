@@ -1,10 +1,11 @@
-jest.mock('expo-secure-store', () => ({
-  getItemAsync: jest.fn(async () => null),
-  setItemAsync: jest.fn(async () => undefined),
-  deleteItemAsync: jest.fn(async () => undefined),
-  AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY',
-}));
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
+
+// Native SQLite is unavailable under Jest; tests inject an in-memory database via setDatabaseForTesting.
+jest.mock('expo-sqlite', () => ({
+  openDatabaseAsync: jest.fn(async () => {
+    throw new Error('expo-sqlite is not available in tests; call setDatabaseForTesting().');
+  }),
+}));

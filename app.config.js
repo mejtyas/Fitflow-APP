@@ -1,23 +1,24 @@
 /** @param {import('expo/config').ConfigContext} context */
 module.exports = ({ config }) => ({
   ...config,
-  name: 'FitFlow',
+  name: 'Lixo',
+  // Must stay `fitflow-app`: it is the slug of the EAS project referenced by extra.eas.projectId.
   slug: 'fitflow-app',
   owner: 'mejtyas',
-  version: '1.0.0',
+  version: '1.1.0',
   orientation: 'portrait',
-  scheme: 'fitflow',
+  scheme: 'lixo',
   userInterfaceStyle: 'dark',
   icon: './assets/images/icon.png',
   ios: {
     supportsTablet: true,
-    bundleIdentifier: 'com.mejtyas.fitflow',
+    bundleIdentifier: 'com.fitflow.lixo',
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
     },
   },
   android: {
-    package: 'com.mejtyas.fitflow',
+    package: 'com.mejtyas.lixo',
     adaptiveIcon: {
       backgroundColor: '#141315',
       foregroundImage: './assets/images/icon.png',
@@ -31,7 +32,6 @@ module.exports = ({ config }) => ({
   },
   plugins: [
     'expo-router',
-    ['expo-secure-store', { configureAndroidBackup: true }],
     ['expo-notifications', { defaultChannel: 'rest-timers' }],
     '@react-native-community/datetimepicker',
     [
@@ -48,9 +48,6 @@ module.exports = ({ config }) => ({
     reactCompiler: true,
   },
   extra: {
-    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
-    supabasePublishableKey:
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY ?? '',
     eas: {
       projectId: 'c945c55f-9cce-489a-9cc3-0e700d43b66d',
     },

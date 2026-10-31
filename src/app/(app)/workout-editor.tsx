@@ -6,20 +6,17 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, ErrorBanner, Field, LoadingScreen, PageHeader, Screen } from '@/components/ui';
 import { colors, fonts, radius } from '@/constants/theme';
 import { queryKeys } from '@/lib/query-keys';
-import { useAuth } from '@/providers/auth-provider';
 import { errorMessage } from '@/services/shared';
 import { fetchWorkoutEditor, saveWorkout, type WorkoutExerciseDraft } from '@/services/workouts';
 
 export default function WorkoutEditorScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const workoutId = typeof params.id === 'string' ? params.id : null;
-  const { user } = useAuth();
-  const userId = user!.id;
   const router = useRouter();
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: queryKeys.workoutEditor(userId, workoutId),
-    queryFn: () => fetchWorkoutEditor(userId, workoutId),
+    queryKey: queryKeys.workoutEditor(workoutId),
+    queryFn: () => fetchWorkoutEditor(workoutId),
   });
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [entriesDraft, setEntriesDraft] = useState<WorkoutExerciseDraft[] | null>(null);
@@ -34,7 +31,7 @@ export default function WorkoutEditorScreen() {
   };
 
   const save = useMutation({
-    mutationFn: () => saveWorkout(userId, { workoutId, name, entries }),
+    mutationFn: () => saveWorkout({ workoutId, name, entries }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.all });
       router.back();
