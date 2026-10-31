@@ -59,19 +59,26 @@ try:
             {'extendedWaitUntil': {'visible': expected, 'timeout': 30000}},
             {'assertNotVisible': 'Open in.*'},
             {'waitForAnimationToEnd': {'timeout': 5000}},
-            {'takeScreenshot': str((output / name).resolve())},
+            {'takeScreenshot': name},
         ]
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml') as flow:
         flow.write(json.dumps({'appId': bundle}) + '\n---\n' + json.dumps(commands))
         flow.flush()
-        subprocess.run(['maestro', '--device', device, 'test', flow.name], check=True)
+        result = subprocess.run(['maestro', '--device', device, 'test', '--test-output-dir', str(output / 'maestro'), flow.name], check=False)
     for name, url, _ in routes:
+        matches = list((output / 'maestro').rglob(name + '.png'))
+        if not matches:
+            continue
+        assert len(matches) == 1, matches
         path = output / (name + '.png')
+        matches[0].replace(path)
         width, height = struct.unpack('>II', path.read_bytes()[16:24])
         allowed = {(1206, 2622), (1179, 2556)} if kind == 'iphone' else {(2064, 2752), (2048, 2732)}
         assert (width, height) in allowed, (path, width, height)
         manifest['screenshots'].append({'file': path.name, 'width': width, 'height': height, 'route': url})
         print(path, width, height, flush=True)
+    result.check_returncode()
+    assert len(manifest['screenshots']) == len(routes), 'Missing screenshot output'
 finally:
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     run('xcrun', 'simctl', 'spawn', device, 'log', 'show', '--last', '3m', '--style', 'compact', '--predicate', 'process == "Lixo"', check=False)
