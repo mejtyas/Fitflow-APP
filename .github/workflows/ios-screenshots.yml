@@ -25,9 +25,20 @@ jobs:
       matrix:
         device: [iphone, ipad]
     env:
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: '180000'
+      MAESTRO_CLI_NO_ANALYTICS: '1'
       SIMULATOR_ARTIFACT_URL: ${{ inputs.artifact_url || vars.IOS_SCREENSHOT_ARTIFACT_URL }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Maestro simulator UI automation
+        run: |
+          curl --fail --location --retry 3 https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.12.0/maestro.zip -o "$RUNNER_TEMP/maestro.zip"
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/maestro/bin" >> "$GITHUB_PATH"
       - name: Download simulator app
         shell: bash
         run: |

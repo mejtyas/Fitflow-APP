@@ -7,6 +7,7 @@ import struct
 import subprocess
 import sys
 import time
+import tempfile
 from importlib.util import module_from_spec, spec_from_file_location
 
 
@@ -40,14 +41,32 @@ spec.loader.exec_module(fixture)
 session = fixture.seed(pathlib.Path(container) / 'Documents/SQLite/lixo.db')
 run('xcrun', 'simctl', 'launch', device, bundle)
 time.sleep(15)
-routes = [('01-dashboard', 'lixo:///'), ('02-active-workout', 'lixo:///active?session=' + session), ('03-history', 'lixo:///history'), ('04-routines', 'lixo:///workouts')]
+routes = [
+    ('01-dashboard', 'lixo:///', 'Ready for the next session.*'),
+    ('02-active-workout', 'lixo:///active?session=' + session, 'Bench Press'),
+    ('03-history', 'lixo:///history', 'Completed sessions, newest first.'),
+    ('04-routines', 'lixo:///workouts', 'Reusable routines with exercise order and default set counts.'),
+]
 manifest = {'device': chosen, 'bundleIdentifier': bundle, 'buildURL': os.environ.get('SIMULATOR_ARTIFACT_URL'), 'screenshots': []}
 try:
-    for name, url in routes:
-        run('xcrun', 'simctl', 'openurl', device, url)
-        time.sleep(6)
+    # iOS 26 requires explicit confirmation for the first custom-scheme link.
+    # Maestro drives the real simulator accessibility UI and checks each route.
+    commands = []
+    for name, url, expected in routes:
+        commands += [
+            {'openLink': url},
+            {'tapOn': {'text': 'Open', 'optional': True}},
+            {'extendedWaitUntil': {'visible': expected, 'timeout': 30000}},
+            {'assertNotVisible': 'Open in.*'},
+            {'waitForAnimationToEnd': {'timeout': 5000}},
+            {'takeScreenshot': str((output / name).resolve())},
+        ]
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml') as flow:
+        flow.write(json.dumps({'appId': bundle}) + '\n---\n' + json.dumps(commands))
+        flow.flush()
+        subprocess.run(['maestro', '--device', device, 'test', flow.name], check=True)
+    for name, url, _ in routes:
         path = output / (name + '.png')
-        run('xcrun', 'simctl', 'io', device, 'screenshot', str(path))
         width, height = struct.unpack('>II', path.read_bytes()[16:24])
         allowed = {(1206, 2622), (1179, 2556)} if kind == 'iphone' else {(2064, 2752), (2048, 2732)}
         assert (width, height) in allowed, (path, width, height)
