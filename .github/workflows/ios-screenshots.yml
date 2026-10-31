@@ -1,0 +1,51 @@
+name: iOS App Store screenshots
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ios-screenshots.yml'
+      - 'scripts/capture-ios-screenshots.py'
+      - 'scripts/seed-screenshot-db.py'
+  workflow_dispatch:
+    inputs:
+      artifact_url:
+        description: HTTPS URL of the completed EAS iOS simulator build tar.gz
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: macos-15
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iphone, ipad]
+    env:
+      SIMULATOR_ARTIFACT_URL: ${{ inputs.artifact_url || vars.IOS_SCREENSHOT_ARTIFACT_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SIMULATOR_ARTIFACT_URL" == https://* ]]
+          curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' "$SIMULATOR_ARTIFACT_URL" -o "$RUNNER_TEMP/simulator.tar.gz"
+          mkdir "$RUNNER_TEMP/simulator-app"
+          tar -xzf "$RUNNER_TEMP/simulator.tar.gz" -C "$RUNNER_TEMP/simulator-app"
+          APP_PATH=$(find "$RUNNER_TEMP/simulator-app" -maxdepth 3 -type d -name '*.app' -print -quit)
+          test -n "$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+      - name: Capture native screenshots with fictional workout data
+        run: python3 scripts/capture-ios-screenshots.py '${{ matrix.device }}' "$APP_PATH"
+      - name: Upload screenshots and device manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-${{ matrix.device }}
+          path: screenshots/
+          if-no-files-found: error
+          retention-days: 30

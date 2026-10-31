@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Database, Save, Settings, ShieldAlert, Smartphone, Timer, Trash2 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, ErrorBanner, Field, PageHeader, Screen } from '@/components/ui';
 import { colors, fonts, radius } from '@/constants/theme';
 import { formatRestMs } from '@/lib/format';
@@ -10,6 +10,14 @@ import { getDefaultRestSeconds, REST_PRESET_SECONDS, saveDefaultRestSeconds } fr
 import { queryKeys } from '@/lib/query-keys';
 import { deleteAllUserData } from '@/services/history';
 import { errorMessage } from '@/services/shared';
+
+const SUPPORT_URL = 'https://lixo-fitness-support.sturdy-loom-1242.chatgpt.site';
+
+function openSupportPage(path = '') {
+  void Linking.openURL(`${SUPPORT_URL}/${path}`).catch(() => {
+    Alert.alert('Could not open page', 'Please try again when a browser and an internet connection are available.');
+  });
+}
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -79,6 +87,12 @@ export default function SettingsScreen() {
         </View>
         <Field label="Custom seconds (15–600)" value={draft} onChangeText={setDraft} keyboardType="number-pad" />
         <Button title={saved ? 'Saved' : 'Save default'} variant={saved ? 'secondary' : 'primary'} onPress={() => void save()} left={<Save color={saved ? colors.success : colors.primaryText} size={16} />} />
+      </Card>
+      <Card style={styles.cardGap}>
+        <Text style={styles.title}>Support & privacy</Text>
+        <Text style={styles.body}>Your training data stays on this device. Read how Lixo handles your data or get help using the app.</Text>
+        <Button title="Privacy policy" variant="outline" onPress={() => openSupportPage('privacy.html')} />
+        <Button title="Support" variant="outline" onPress={() => openSupportPage()} />
       </Card>
       <Card style={styles.dangerCard}>
         <View style={styles.heading}><ShieldAlert color={colors.destructive} size={20} /><Text style={[styles.title, { color: colors.destructive }]}>Data management</Text></View>
