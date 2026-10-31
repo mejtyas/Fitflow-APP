@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture native, unmodified iOS simulator screenshots from an EAS .app."""
+"""Capture one native dashboard screenshot per App Store device class."""
 import json
 import os
 import pathlib
@@ -38,14 +38,11 @@ container = run('xcrun', 'simctl', 'get_app_container', device, bundle, 'data')
 spec = spec_from_file_location('fixture', pathlib.Path(__file__).with_name('seed-screenshot-db.py'))
 fixture = module_from_spec(spec)
 spec.loader.exec_module(fixture)
-session = fixture.seed(pathlib.Path(container) / 'Documents/SQLite/lixo.db')
+fixture.seed(pathlib.Path(container) / 'Documents/SQLite/lixo.db')
 run('xcrun', 'simctl', 'launch', device, bundle)
 time.sleep(15)
 routes = [
     ('01-dashboard', 'lixo:///', 'Ready for the next session.*'),
-    ('02-active-workout', 'lixo:///active?session=' + session, 'Bench Press'),
-    ('03-history', 'lixo:///history', 'Completed sessions, newest first.'),
-    ('04-routines', 'lixo:///workouts', 'Reusable routines with exercise order and default set counts.'),
 ]
 manifest = {'device': chosen, 'bundleIdentifier': bundle, 'buildURL': os.environ.get('SIMULATOR_ARTIFACT_URL'), 'screenshots': []}
 try:
